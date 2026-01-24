@@ -5,6 +5,61 @@ import { randomUUID } from 'node:crypto';
 import { setProject, getProject } from './state';
 import Store from 'electron-store';
 
+// Executor configuration
+const EXECUTOR_URL = process.env.EXECUTOR_URL || 'http://localhost:8000';
+
+/**
+ * Send the AI API key to the executor service.
+ * This configures the executor to use the key for the upcoming test run.
+ */
+async function sendConfigToExecutor(apiKey: string): Promise<boolean> {
+    try {
+        const response = await fetch(`${EXECUTOR_URL}/config`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ geminiApiKey: apiKey })
+        });
+        
+        if (!response.ok) {
+            const error = await response.text();
+            console.error('[handlers] Failed to configure executor:', error);
+            return false;
+        }
+        
+        console.log('[handlers] Executor configured with API key');
+        return true;
+    } catch (error) {
+        console.error('[handlers] Error connecting to executor:', error);
+        return false;
+    }
+}
+
+/**
+ * Trigger test execution on the executor service.
+ */
+async function triggerExecution(executionRequest: any): Promise<{ success: boolean; error?: string }> {
+    try {
+        const response = await fetch(`${EXECUTOR_URL}/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(executionRequest)
+        });
+        
+        if (!response.ok) {
+            const error = await response.text();
+            console.error('[handlers] Executor returned error:', error);
+            return { success: false, error };
+        }
+        
+        const result = await response.json();
+        console.log('[handlers] Execution started:', result);
+        return { success: true };
+    } catch (error: any) {
+        console.error('[handlers] Error triggering execution:', error);
+        return { success: false, error: error.message || 'Failed to connect to executor' };
+    }
+}
+
 // Initialize electron-store for AI configuration
 interface AIConfigStore {
     aiConfig: {
@@ -453,7 +508,7 @@ export function setupHandlers(mainWindow: BrowserWindow) {
 
     // Test Run Create
     ipcMain.handle('testrun:create', async (_, data) => {
-        // data: { projectId, selectedFeatureIds, ... }
+        // data: { projectId, selectedFeatureIds, selectedTestCases, selectedLaunchConfigIds, scope }
         const currentProject = getProject();
         if (!currentProject) throw new Error("No project selected");
 
@@ -467,16 +522,133 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         const runData = {
             _id: runId,
             ...data,
-            status: 'running',
+            status: 'pending',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-            logPath: path.join(runPath, 'log.txt') // Placeholder
+            logPath: path.join(runPath, 'log.txt')
         };
 
         await fs.writeJson(path.join(runPath, 'run.json'), runData, { spaces: 2 });
-
-        // Create empty log file
         await fs.writeFile(path.join(runPath, 'log.txt'), '');
+
+        // === Send AI configuration to executor ===
+        const aiConfig = store.get('aiConfig');
+        if (aiConfig?.apiKey) {
+            const configSuccess = await sendConfigToExecutor(aiConfig.apiKey);
+            if (!configSuccess) {
+                console.warn('[handlers] Could not configure executor with API key, execution may fail');
+            }
+        } else {
+            console.warn('[handlers] No AI config found, executor will use its .env configuration');
+        }
+
+        // === Build execution request and trigger executor ===
+        try {
+            const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
+            const plan = await fs.readJson(planPath);
+            
+            // Determine which test cases to run based on scope
+            let testCasesToRun: any[] = [];
+            let featuresToRun: any[] = [];
+            
+            const scope = data.scope || 'project';
+            const selectedFeatureIds = data.selectedFeatureIds || [];
+            const selectedTestCases = data.selectedTestCases || [];
+            const selectedLaunchConfigIds = data.selectedLaunchConfigIds || [];
+            
+            if (scope === 'project') {
+                // Run all test cases
+                testCasesToRun = plan.testCases || [];
+                featuresToRun = plan.features || [];
+            } else if (scope === 'features' && selectedFeatureIds.length > 0) {
+                // Run test cases from selected features
+                featuresToRun = (plan.features || []).filter((f: any) => selectedFeatureIds.includes(f._id));
+                testCasesToRun = (plan.testCases || []).filter((tc: any) => selectedFeatureIds.includes(tc.featureId));
+            } else if (scope === 'testcases' && selectedTestCases.length > 0) {
+                // Run specific test cases
+                const selectedIds = selectedTestCases.map((s: any) => s.testCaseId);
+                testCasesToRun = (plan.testCases || []).filter((tc: any) => selectedIds.includes(tc._id));
+                const featureIds = [...new Set(testCasesToRun.map((tc: any) => tc.featureId))];
+                featuresToRun = (plan.features || []).filter((f: any) => featureIds.includes(f._id));
+            }
+            
+            // Get launch configuration (use first selected for now)
+            let launchConfig = null;
+            if (selectedLaunchConfigIds.length > 0 && plan.project?.launchConfigurations) {
+                launchConfig = plan.project.launchConfigurations.find(
+                    (lc: any) => lc._id === selectedLaunchConfigIds[0]
+                );
+            }
+            
+            // Build features map for the executor
+            const featuresMap: Record<string, any> = {};
+            for (const feature of featuresToRun) {
+                featuresMap[feature._id] = {
+                    name: feature.name,
+                    globalSetup: feature.globalSetup || null,
+                    globalTeardown: feature.globalTeardown || null
+                };
+            }
+            
+            // Build test cases in executor format
+            const testCasesForExecutor = testCasesToRun.map((tc: any) => {
+                const feature = featuresToRun.find((f: any) => f._id === tc.featureId);
+                return {
+                    testRunId: runId,
+                    featureId: tc.featureId,
+                    featureName: feature?.name || 'Unknown Feature',
+                    testCaseId: tc._id,
+                    testCaseTitle: tc.title,
+                    steps: (tc.steps || []).map((step: any, idx: number) => ({
+                        order: step.order ?? idx,
+                        instruction: step.instruction,
+                        expectedResult: step.expectedResult || null,
+                        expectedImage: step.expectedImage || null
+                    })),
+                    localSetup: tc.localSetup || null,
+                    localTeardown: tc.localTeardown || null
+                };
+            });
+            
+            // Build execution request
+            const executionRequest = {
+                testRunId: runId,
+                projectId: currentProject.id,
+                deviceId: launchConfig?.options?.deviceId || null,
+                launchConfig: launchConfig ? {
+                    ...launchConfig,
+                    cwd: launchConfig.cwd || currentProject.path
+                } : null,
+                features: featuresMap,
+                testCases: testCasesForExecutor
+            };
+            
+            console.log(`[handlers] Triggering execution for ${testCasesForExecutor.length} test cases`);
+            
+            // Update status to running before triggering
+            runData.status = 'running';
+            await fs.writeJson(path.join(runPath, 'run.json'), runData, { spaces: 2 });
+            
+            // Trigger execution (don't await - it runs in background on executor)
+            triggerExecution(executionRequest).then(result => {
+                if (!result.success) {
+                    console.error('[handlers] Execution trigger failed:', result.error);
+                    // Update run status to failed
+                    fs.readJson(path.join(runPath, 'run.json')).then(currentRunData => {
+                        currentRunData.status = 'failed';
+                        currentRunData.statusMessage = result.error || 'Failed to start execution';
+                        fs.writeJson(path.join(runPath, 'run.json'), currentRunData, { spaces: 2 });
+                    });
+                }
+            });
+            
+        } catch (execError: any) {
+            console.error('[handlers] Error preparing execution:', execError);
+            // Update run status but don't fail the create operation
+            runData.status = 'failed';
+            runData.statusMessage = execError.message || 'Failed to prepare execution';
+            await fs.writeJson(path.join(runPath, 'run.json'), runData, { spaces: 2 });
+        }
 
         return runData;
     });
