@@ -88,22 +88,36 @@ const encodeId = (p: string) => Buffer.from(p).toString('hex');
 export function setupHandlers(mainWindow: BrowserWindow) {
     // Browse Directory
     ipcMain.handle('dialog:browse', async () => {
-        const result = await dialog.showOpenDialog(mainWindow, {
-            properties: ['openDirectory', 'createDirectory']
-        });
-        if (result.canceled || result.filePaths.length === 0) return null;
-        return result.filePaths[0];
+        try {
+            console.log('[handlers] dialog:browse called');
+            const result = await dialog.showOpenDialog(mainWindow, {
+                title: 'Select Project Folder',
+                properties: ['openDirectory'],
+                buttonLabel: 'Select Folder'
+            });
+            console.log('[handlers] dialog result:', result);
+            if (result.canceled || result.filePaths.length === 0) return null;
+            return result.filePaths[0];
+        } catch (error) {
+            console.error('[handlers] Error in dialog:browse:', error);
+            throw error;
+        }
     });
 
     // Project Selection
     ipcMain.handle('project:select', async () => {
-        const result = await dialog.showOpenDialog(mainWindow, {
-            properties: ['openDirectory', 'createDirectory']
-        });
+        try {
+            console.log('[handlers] project:select called');
+            const result = await dialog.showOpenDialog(mainWindow, {
+                title: 'Open Project Folder',
+                properties: ['openDirectory'],
+                buttonLabel: 'Open Project'
+            });
+            console.log('[handlers] project:select result:', result);
 
-        if (result.canceled || result.filePaths.length === 0) {
-            return null;
-        }
+            if (result.canceled || result.filePaths.length === 0) {
+                return null;
+            }
 
         const projectPath = result.filePaths[0];
         const projectId = encodeId(projectPath);
@@ -153,6 +167,10 @@ export function setupHandlers(mainWindow: BrowserWindow) {
 
         // Ensure ID matches path (in case moved)
         return { ...projectData, _id: projectId };
+        } catch (error) {
+            console.error('[handlers] Error in project:select:', error);
+            throw error;
+        }
     });
 
     // Project Create

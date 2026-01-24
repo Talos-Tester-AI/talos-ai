@@ -185,6 +185,120 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
         res.json({ status: 'ok' });
     });
 
+    // Project Analysis with Streaming (SSE)
+    app.post('/api/projects/:id/analyze', async (req, res) => {
+        try {
+            const { id } = req.params;
+            const config = req.body;
+
+            // Set up SSE
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+
+            const sendEvent = (data: any) => {
+                res.write(`data: ${JSON.stringify(data)}\n\n`);
+            };
+
+            // Get project path
+            const projectPath = Buffer.from(id, 'hex').toString('utf-8');
+            const planPath = path.join(projectPath, 'test-plan', 'plan.json');
+
+            if (!await fs.pathExists(planPath)) {
+                sendEvent({ stage: 'error', error: 'Project not found' });
+                res.end();
+                return;
+            }
+
+            // Send initialization event
+            sendEvent({ stage: 'init', message: 'Starting analysis...' });
+
+            // Stage 1: Discovery
+            sendEvent({ stage: 'discovery', message: 'Discovering project files...', detail: 'Scanning project directory' });
+            
+            // Simulate discovery (you can implement actual file discovery here)
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Stage 2: Reading
+            sendEvent({ stage: 'reading', message: 'Reading project context...', detail: 'Analyzing project structure' });
+            
+            // Read project files (implement actual logic as needed)
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Stage 3: AI Analysis
+            sendEvent({ stage: 'analysis', message: 'Performing AI analysis...', detail: 'Generating test proposals' });
+            
+            // This is where you would call your AI analysis logic
+            // For now, returning a placeholder result
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Stage 4: Figma (if configured)
+            if (config.figmaProjectUrl && config.figmaAccessToken) {
+                sendEvent({ stage: 'figma', message: 'Processing Figma designs...', detail: 'Analyzing UI components' });
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            
+            // Stage 5: Complete
+            sendEvent({ stage: 'complete', message: 'Finalizing...', detail: 'Preparing results' });
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            // Send final result
+            const result = {
+                proposal: {
+                    features: [],
+                    testCases: []
+                },
+                figmaAnalysis: null
+            };
+            
+            sendEvent({ stage: 'result', result });
+            res.end();
+            
+        } catch (e: any) {
+            console.error('Error in project analysis:', e);
+            res.write(`data: ${JSON.stringify({ stage: 'error', error: e.message })}\n\n`);
+            res.end();
+        }
+    });
+
+    // Project Import Proposal
+    app.post('/api/projects/:id/import-proposal', async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { proposal } = req.body;
+
+            // Get project path
+            const projectPath = Buffer.from(id, 'hex').toString('utf-8');
+            const planPath = path.join(projectPath, 'test-plan', 'plan.json');
+
+            if (!await fs.pathExists(planPath)) {
+                return res.status(404).json({ error: 'Project not found' });
+            }
+
+            // Read existing plan
+            const plan = await fs.readJson(planPath);
+
+            // Merge proposal into plan
+            if (proposal.features) {
+                plan.features = [...(plan.features || []), ...proposal.features];
+            }
+            if (proposal.testCases) {
+                plan.testCases = [...(plan.testCases || []), ...proposal.testCases];
+            }
+
+            // Save updated plan
+            await fs.writeJson(planPath, plan, { spaces: 2 });
+
+            // Notify frontend via IPC
+            mainWindow.webContents.send('project:updated', { id });
+
+            res.json({ success: true });
+        } catch (e: any) {
+            console.error('Error importing proposal:', e);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     app.listen(port, () => {
         console.log(`Agent server listening on port ${port}`);
     });

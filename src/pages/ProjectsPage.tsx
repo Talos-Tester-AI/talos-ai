@@ -63,12 +63,21 @@ export const ProjectsPage = () => {
 
   const handleOpenProject = async () => {
     try {
+      console.log('[ProjectsPage] Opening project via dialog...');
       const response = await selectProjectFolder();
+      console.log('[ProjectsPage] Dialog response:', response);
+      
       if (response.data) {
+        console.log('[ProjectsPage] Project selected, navigating to:', response.data._id);
+        // Reload projects list to include the newly opened project
+        await dispatch(fetchProjects());
         navigate(`/projects/${response.data._id}`);
+      } else {
+        console.log('[ProjectsPage] No project selected (user cancelled)');
       }
     } catch (error) {
       console.error('Failed to open project:', error);
+      alert(`Failed to open project: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 

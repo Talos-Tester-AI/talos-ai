@@ -13,8 +13,18 @@ import type {
 
 // Wrapper to mimic Axios response
 const invoke = async <T>(channel: string, ...args: any[]) => {
-  const data = await window.electron.ipcRenderer.invoke(channel, ...args);
-  return { data: data as T };
+  console.log(`[IPC] Invoking channel: ${channel}`, args);
+  try {
+    if (!window.electron || !window.electron.ipcRenderer) {
+      throw new Error('Electron IPC not available. Make sure the app is running in Electron.');
+    }
+    const data = await window.electron.ipcRenderer.invoke(channel, ...args);
+    console.log(`[IPC] Response from ${channel}:`, data);
+    return { data: data as T };
+  } catch (error) {
+    console.error(`[IPC] Error invoking ${channel}:`, error);
+    throw error;
+  }
 };
 
 // Projects

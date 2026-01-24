@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Plus, ArrowLeft, List, Sparkles, Play, FolderOpen, Box, Terminal, Pencil, Check, X, Trash2, History } from 'lucide-react';
 import { getFeaturesByProject, createFeature, deleteProject, browseDirectory } from '../api/client';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { updateProjectThunk } from '../store/slices/projectSlice';
+import { updateProjectThunk, fetchProject } from '../store/slices/projectSlice';
 import type { Project, Feature } from '../types';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
@@ -141,6 +141,14 @@ export const ProjectDetailPage = () => {
     figmaProjectUrl: '',
     figmaAccessToken: ''
   });
+
+  // Fetch project on mount or when ID changes
+  useEffect(() => {
+    if (id) {
+      console.log('[ProjectDetailPage] Fetching project:', id);
+      dispatch(fetchProject(id));
+    }
+  }, [id, dispatch]);
 
   // Sync edits when project loads
   useEffect(() => {
