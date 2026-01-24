@@ -29,11 +29,11 @@ export const AI_MODELS: Record<AIProvider, AIModelOption[]> = {
     { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku', category: 'simple' },
   ],
   gemini: [
-    { id: 'gemini-2.5-pro-preview-05-06', name: 'Gemini 2.5 Pro', category: 'complex' },
-    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash', category: 'complex' },
+    { id: 'gemini-2.5-pro-preview-05-06', name: 'Gemini 2.5 Pro Preview', category: 'complex' },
+    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', category: 'complex' },
+    { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite', category: 'simple' },
     { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', category: 'complex' },
     { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', category: 'simple' },
-    { id: 'gemini-1.5-flash-8b', name: 'Gemini 1.5 Flash 8B', category: 'simple' },
   ],
 };
 

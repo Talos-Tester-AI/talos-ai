@@ -3,8 +3,79 @@ import cors from 'cors';
 import bodyParser from 'body-parser';
 import path from 'node:path';
 import fs from 'fs-extra';
+import Store from 'electron-store';
 import { getProject } from './state';
 import { BrowserWindow } from 'electron';
+import { discoverProjectFiles, readProjectContext } from './file-scanner';
+import { generateTestProposal, validateAIConfig, type AIConfig } from './ai-analyzer';
+import { analyzeFigmaProject, buildFigmaContext, validateFigmaConfig, type FigmaAnalysisResult } from './figma-analyzer';
+
+// Access the same store as handlers.ts for AI config
+interface AIConfigStore {
+    aiConfig: AIConfig | null;
+}
+
+const store = new Store<AIConfigStore>({
+    name: 'talos-config',
+    defaults: {
+        aiConfig: null
+    },
+    encryptionKey: 'talos-ai-secure-key-2024'
+});
+
+// Valid Gemini model IDs - updated January 2026
+const VALID_GEMINI_MODELS = [
+    'gemini-2.5-pro-preview-05-06',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-pro',
+    'gemini-1.5-pro-latest',
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-latest',
+    'gemini-pro',
+];
+
+// Known problematic model IDs that need to be fixed
+const GEMINI_MODEL_FIXES: Record<string, string> = {
+    // The preview model format changed - try the stable version first
+    'gemini-2.5-pro-preview-05-06': 'gemini-2.0-flash',
+    'gemini-2.0-flash-exp': 'gemini-2.0-flash',
+    'gemini-1.5-flash-8b': 'gemini-1.5-flash',
+};
+
+/**
+ * Fix problematic Gemini model IDs by replacing them with working alternatives
+ */
+function fixGeminiModelIfNeeded(config: AIConfig): AIConfig {
+    if (config.provider !== 'gemini') {
+        return config;
+    }
+    
+    const fixedConfig = { ...config };
+    let changed = false;
+    
+    // Check and fix complexModel if it's a known problematic model
+    if (GEMINI_MODEL_FIXES[config.complexModel]) {
+        console.log(`[server] Fixing Gemini complexModel: ${config.complexModel} -> ${GEMINI_MODEL_FIXES[config.complexModel]}`);
+        fixedConfig.complexModel = GEMINI_MODEL_FIXES[config.complexModel];
+        changed = true;
+    }
+    
+    // Check and fix simpleModel if it's a known problematic model
+    if (GEMINI_MODEL_FIXES[config.simpleModel]) {
+        console.log(`[server] Fixing Gemini simpleModel: ${config.simpleModel} -> ${GEMINI_MODEL_FIXES[config.simpleModel]}`);
+        fixedConfig.simpleModel = GEMINI_MODEL_FIXES[config.simpleModel];
+        changed = true;
+    }
+    
+    // Update stored config if we made changes
+    if (changed) {
+        store.set('aiConfig', fixedConfig);
+        console.log('[server] Updated stored AI config with working Gemini models');
+    }
+    
+    return fixedConfig;
+}
 
 export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow) {
     const app = express();
@@ -210,45 +281,148 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                 return;
             }
 
+            // Load project data
+            const plan = await fs.readJson(planPath);
+            const projectData = plan.project || {};
+            
+            // Determine the source path for scanning
+            const sourcePath = projectData.folderPath || projectPath;
+            
+            // Get AI configuration
+            let aiConfig = store.get('aiConfig');
+            if (!validateAIConfig(aiConfig)) {
+                sendEvent({ stage: 'error', error: 'AI configuration not found. Please configure AI settings first.' });
+                res.end();
+                return;
+            }
+            
+            // Fix invalid Gemini models if needed
+            aiConfig = fixGeminiModelIfNeeded(aiConfig);
+
             // Send initialization event
             sendEvent({ stage: 'init', message: 'Starting analysis...' });
+            console.log(`[server] Starting analysis for project: ${projectPath}`);
+            console.log(`[server] Source path: ${sourcePath}`);
+            console.log(`[server] AI Provider: ${aiConfig.provider}, Model: ${aiConfig.complexModel}`);
 
             // Stage 1: Discovery
             sendEvent({ stage: 'discovery', message: 'Discovering project files...', detail: 'Scanning project directory' });
             
-            // Simulate discovery (you can implement actual file discovery here)
-            await new Promise(resolve => setTimeout(resolve, 500));
+            let scanResult;
+            try {
+                scanResult = await discoverProjectFiles(sourcePath);
+                sendEvent({ 
+                    stage: 'discovery', 
+                    message: 'File discovery complete', 
+                    detail: `Found ${scanResult.totalFiles} files (${(scanResult.totalSize / 1024).toFixed(1)} KB) - ${scanResult.projectType} project`
+                });
+            } catch (e: any) {
+                console.error('[server] File discovery error:', e);
+                sendEvent({ stage: 'error', error: `File discovery failed: ${e.message}` });
+                res.end();
+                return;
+            }
             
             // Stage 2: Reading
             sendEvent({ stage: 'reading', message: 'Reading project context...', detail: 'Analyzing project structure' });
             
-            // Read project files (implement actual logic as needed)
-            await new Promise(resolve => setTimeout(resolve, 500));
+            let projectContext: string;
+            try {
+                const contextResult = await readProjectContext(scanResult.files);
+                projectContext = contextResult.context;
+                sendEvent({ 
+                    stage: 'reading', 
+                    message: 'Context reading complete', 
+                    detail: `Read ${contextResult.filesRead} files${contextResult.truncated ? ' (truncated)' : ''}`
+                });
+                console.log(`[server] Read ${contextResult.filesRead} files, context size: ${(projectContext.length / 1024).toFixed(1)} KB`);
+            } catch (e: any) {
+                console.error('[server] Context reading error:', e);
+                sendEvent({ stage: 'error', error: `Failed to read project files: ${e.message}` });
+                res.end();
+                return;
+            }
+            
+            // Stage 4: Figma (if configured) - Do this before AI so we can include it in context
+            let figmaAnalysis: FigmaAnalysisResult | null = null;
+            const figmaUrl = config.figmaProjectUrl || projectData.figmaProjectUrl;
+            const figmaToken = config.figmaAccessToken || projectData.figmaAccessToken;
+            
+            if (figmaUrl && figmaToken) {
+                const figmaValidation = validateFigmaConfig(figmaUrl, figmaToken);
+                if (figmaValidation.valid) {
+                    sendEvent({ stage: 'figma', message: 'Processing Figma designs...', detail: 'Fetching design data' });
+                    
+                    try {
+                        figmaAnalysis = await analyzeFigmaProject(figmaUrl, figmaToken, (msg) => {
+                            sendEvent({ stage: 'figma', message: 'Processing Figma designs...', detail: msg });
+                        });
+                        
+                        // Add Figma context to project context
+                        const figmaContext = buildFigmaContext(figmaAnalysis);
+                        projectContext += figmaContext;
+                        
+                        sendEvent({ 
+                            stage: 'figma', 
+                            message: 'Figma analysis complete', 
+                            detail: `Found ${figmaAnalysis.screens.length} screens, ${figmaAnalysis.components.length} components`
+                        });
+                    } catch (e: any) {
+                        console.error('[server] Figma analysis error:', e);
+                        // Don't fail the entire analysis, just skip Figma
+                        sendEvent({ 
+                            stage: 'figma', 
+                            message: 'Figma analysis skipped', 
+                            detail: `Error: ${e.message}`
+                        });
+                    }
+                }
+            }
             
             // Stage 3: AI Analysis
-            sendEvent({ stage: 'analysis', message: 'Performing AI analysis...', detail: 'Generating test proposals' });
+            sendEvent({ stage: 'analysis', message: 'Performing AI analysis...', detail: `Using ${aiConfig.provider} (${aiConfig.complexModel})` });
             
-            // This is where you would call your AI analysis logic
-            // For now, returning a placeholder result
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            // Stage 4: Figma (if configured)
-            if (config.figmaProjectUrl && config.figmaAccessToken) {
-                sendEvent({ stage: 'figma', message: 'Processing Figma designs...', detail: 'Analyzing UI components' });
-                await new Promise(resolve => setTimeout(resolve, 500));
+            let proposal;
+            try {
+                // Get existing feature names to help AI understand what already exists
+                const existingFeatures = (plan.features || []).map((f: any) => f.name);
+                
+                proposal = await generateTestProposal(
+                    aiConfig,
+                    projectContext,
+                    projectData.baseUrl,
+                    projectData.systemContext,
+                    scanResult.projectType,
+                    existingFeatures,
+                    (msg) => {
+                        sendEvent({ stage: 'analysis', message: 'Performing AI analysis...', detail: msg });
+                    }
+                );
+                
+                const totalTestCases = proposal.features.reduce((sum, f) => sum + f.testCases.length, 0);
+                sendEvent({ 
+                    stage: 'analysis', 
+                    message: 'AI analysis complete', 
+                    detail: `Generated ${proposal.features.length} features with ${totalTestCases} test cases`
+                });
+                console.log(`[server] Generated ${proposal.features.length} features with ${totalTestCases} test cases`);
+            } catch (e: any) {
+                console.error('[server] AI analysis error:', e);
+                sendEvent({ stage: 'error', error: `AI analysis failed: ${e.message}` });
+                res.end();
+                return;
             }
             
             // Stage 5: Complete
             sendEvent({ stage: 'complete', message: 'Finalizing...', detail: 'Preparing results' });
-            await new Promise(resolve => setTimeout(resolve, 300));
             
             // Send final result
             const result = {
-                proposal: {
-                    features: [],
-                    testCases: []
-                },
-                figmaAnalysis: null
+                proposal: proposal,
+                figmaAnalysis: figmaAnalysis ? {
+                    screens: figmaAnalysis.screens,
+                    components: figmaAnalysis.components
+                } : null
             };
             
             sendEvent({ stage: 'result', result });
