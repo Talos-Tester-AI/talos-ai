@@ -6,6 +6,27 @@ import { startAgentServer } from './server'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// Fix D-Bus/systemd errors AND blank screen on Linux
+if (process.platform === 'linux') {
+    // Disable GPU acceleration which causes blank screen on some Linux systems
+    app.disableHardwareAcceleration()
+    
+    // Disable features that cause D-Bus/systemd errors
+    app.commandLine.appendSwitch('disable-features', 'MediaSessionService')
+    
+    // Use software rendering instead of GPU
+    app.commandLine.appendSwitch('disable-gpu')
+    app.commandLine.appendSwitch('disable-gpu-compositing')
+}
+
+// Ensure single instance to prevent D-Bus conflicts
+const gotTheLock = app.requestSingleInstanceLock()
+
+if (!gotTheLock) {
+    console.log('Another instance is already running. Exiting.')
+    app.quit()
+}
+
 // The built directory structure
 //
 // ├─┬─┬ dist
@@ -22,6 +43,14 @@ let win: BrowserWindow | null
 // 🚧 Use ['ENV_NAME'] avoid vite:define plugin - Vite@2.x
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
+// Handle second instance - focus existing window
+app.on('second-instance', () => {
+    if (win) {
+        if (win.isMinimized()) win.restore()
+        win.focus()
+    }
+})
+
 function createWindow() {
     win = new BrowserWindow({
         width: 1200,
@@ -29,6 +58,9 @@ function createWindow() {
         icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
         webPreferences: {
             preload: path.join(__dirname, 'preload.mjs'),
+            nodeIntegration: false,
+            contextIsolation: false, // Disabled for Linux compatibility
+            webSecurity: false,
         },
     })
 
@@ -40,12 +72,12 @@ function createWindow() {
         win?.webContents.send('main-process-message', (new Date).toLocaleString())
     })
 
+    // Open DevTools in development
     win.webContents.openDevTools()
 
     if (VITE_DEV_SERVER_URL) {
         win.loadURL(VITE_DEV_SERVER_URL)
     } else {
-        // win.loadFile('dist/index.html')
         win.loadFile(path.join(process.env.DIST || '', 'index.html'))
     }
 }
@@ -56,6 +88,14 @@ function createWindow() {
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit()
+    }
+    win = null
+})
+
+// Proper cleanup on quit
+app.on('before-quit', () => {
+    if (win) {
+        win.removeAllListeners()
     }
 })
 

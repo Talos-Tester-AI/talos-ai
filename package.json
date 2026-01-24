@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "vite",
+    "dev": "./dev-clean.sh",
+    "dev:unfiltered": "vite",
     "build": "tsc && vite build && electron-builder",
     "lint": "eslint .",
     "preview": "vite preview"
