@@ -74,10 +74,8 @@ export const getTestRun = (id: string) => invoke<TestRun>('testrun:get', id);
 export const createTestRun = (data: any) => invoke<TestRun>('testrun:create', data);
 export const cancelTestRun = (id: string) => invoke('testrun:cancel', id);
 
-// Test Run Configs
-export const getRunConfigs = (projectId: string) => invoke<TestRunConfig[]>('config:list', projectId);
-export const createRunConfig = (projectId: string, data: Partial<TestRunConfig>) => invoke<TestRunConfig>('config:create', projectId, data);
-export const deleteRunConfig = (id: string) => invoke('config:delete', id);
+// Test Run Configs - REMOVED: Use Redux instead for data operations
+// Test run execution uses testrun:create which is OK as it's execution, not data CRUD
 
 // Images
 export const uploadImage = (projectId: string, file: File) => {
