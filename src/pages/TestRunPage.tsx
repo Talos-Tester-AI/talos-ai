@@ -8,6 +8,7 @@ import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { Modal } from '../components/Modal';
 import { TestSelector } from '../components/TestSelector';
+import { AIConfigBanner, AIConfigWarningModal, useAIConfigCheck } from '../components/AIConfigWarning';
 import { clsx } from 'clsx';
 
 export const TestRunPage = () => {
@@ -32,6 +33,10 @@ export const TestRunPage = () => {
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [configName, setConfigName] = useState('');
 
+  // AI Config warning
+  const { isConfigured } = useAIConfigCheck();
+  const [showAIWarning, setShowAIWarning] = useState(false);
+
   useEffect(() => {
     if (projectId) {
       loadData();
@@ -53,12 +58,18 @@ export const TestRunPage = () => {
     }
   };
 
-  const handleStartRun = async () => {
+  const handleStartRun = async (skipWarning = false) => {
     if (!projectId) return;
 
     // Validate selection
     if (selectedLaunchConfigIds.length === 0) {
       alert("Please select at least one launch configuration.");
+      return;
+    }
+
+    // Check AI config before starting
+    if (!isConfigured && !skipWarning) {
+      setShowAIWarning(true);
       return;
     }
 
@@ -81,6 +92,11 @@ export const TestRunPage = () => {
     } finally {
       setStarting(false);
     }
+  };
+
+  const handleContinueWithoutConfig = () => {
+    setShowAIWarning(false);
+    handleStartRun(true);
   };
 
   const handleSaveConfig = async () => {
@@ -145,6 +161,9 @@ export const TestRunPage = () => {
         <h1 className="text-2xl font-bold text-gray-900">Run Tests</h1>
         <div className="text-sm text-gray-500">{project.name}</div>
       </div>
+
+      {/* AI Config Warning Banner */}
+      <AIConfigBanner />
 
       {/* Saved Configurations */}
       {savedConfigs.length > 0 && (
@@ -318,6 +337,15 @@ export const TestRunPage = () => {
           </div>
         </div>
       </Modal>
+
+      {/* AI Config Warning Modal */}
+      <AIConfigWarningModal
+        isOpen={showAIWarning}
+        onClose={() => setShowAIWarning(false)}
+        onContinue={handleContinueWithoutConfig}
+        title="AI Configuration Missing"
+        message="Running tests uses AI for step execution and validation. Configure your AI provider for best results, or continue anyway."
+      />
     </div>
   );
 };

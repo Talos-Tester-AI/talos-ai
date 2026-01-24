@@ -13,6 +13,7 @@ import { TestRunPage } from './pages/TestRunPage';
 import { TestRunLivePage } from './pages/TestRunLivePage';
 import { LaunchConfigListPage } from './pages/LaunchConfigListPage';
 import { LaunchConfigFormPage } from './pages/LaunchConfigFormPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { ProjectProvider } from './contexts/ProjectContext';
 
 const ProjectRouteWrapper = () => {
@@ -30,6 +31,7 @@ function App() {
       <Layout>
         <Routes>
           <Route path="/" element={<ProjectsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
 
           {/* Project routes wrapped in Provider */}
           <Route path="/projects/:id" element={<ProjectRouteWrapper />}>

@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, FolderOpen } from 'lucide-react';
+import { Home, FolderOpen, Settings } from 'lucide-react';
 import { clsx } from 'clsx';
 
 interface LayoutProps {
@@ -11,7 +11,8 @@ export const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
 
   const navItems = [
-    { path: '/', label: 'Projects', icon: Home }
+    { path: '/', label: 'Projects', icon: Home },
+    { path: '/settings', label: 'Settings', icon: Settings }
   ];
 
   return (

@@ -6,6 +6,7 @@ import type { Project } from '../types';
 import { getProject } from '../api/client';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
+import { AIConfigWarningModal, useAIConfigCheck } from '../components/AIConfigWarning';
 
 interface TestStep {
   order: number;
@@ -68,6 +69,11 @@ export const TestProposalPreviewPage = () => {
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const imageContainerRef = useRef<HTMLDivElement>(null);
 
+  // AI Config check
+  const { isConfigured, isLoading: aiConfigLoading } = useAIConfigCheck();
+  const [showAIWarning, setShowAIWarning] = useState(false);
+  const [analysisStarted, setAnalysisStarted] = useState(false);
+
   // Progress State
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([
     { id: 'init', label: 'Initializing', status: 'pending' },
@@ -79,10 +85,23 @@ export const TestProposalPreviewPage = () => {
   ]);
 
   useEffect(() => {
-    if (id) {
-      loadProjectAndAnalyze();
+    if (id && !aiConfigLoading && !analysisStarted) {
+      if (!isConfigured) {
+        setShowAIWarning(true);
+        setLoading(false);
+      } else {
+        setAnalysisStarted(true);
+        loadProjectAndAnalyze();
+      }
     }
-  }, [id]);
+  }, [id, aiConfigLoading, isConfigured, analysisStarted]);
+
+  const handleContinueWithoutConfig = () => {
+    setShowAIWarning(false);
+    setAnalysisStarted(true);
+    setLoading(true);
+    loadProjectAndAnalyze();
+  };
 
   const updateStep = (stepId: string, status: 'scanning' | 'done', detail?: string) => {
     setProgressSteps(prev => prev.map(step => {
@@ -269,8 +288,37 @@ export const TestProposalPreviewPage = () => {
     </div>
   );
 
-  if (loading) {
+  if (loading && !showAIWarning) {
     return renderProgress();
+  }
+
+  // Show AI config warning modal
+  if (showAIWarning) {
+    return (
+      <div>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => navigate(`/projects/${id}`)}
+          className="mb-4"
+        >
+          <ArrowLeft size={16} className="mr-2" />
+          Back to Project
+        </Button>
+        <Card className="text-center py-12">
+          <Brain size={48} className="mx-auto text-gray-400 mb-4" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">AI Analysis</h2>
+          <p className="text-gray-600 mb-4">Ready to analyze your project with AI</p>
+        </Card>
+        <AIConfigWarningModal
+          isOpen={showAIWarning}
+          onClose={() => navigate(`/projects/${id}`)}
+          onContinue={handleContinueWithoutConfig}
+          title="AI Configuration Missing"
+          message="To analyze your project and generate test cases, you need to configure an AI provider. Would you like to configure it now?"
+        />
+      </div>
+    );
   }
 
   if (error) {

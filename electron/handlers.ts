@@ -1,8 +1,27 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { ipcMain, dialog, BrowserWindow, app } from 'electron';
 import path from 'node:path';
 import fs from 'fs-extra';
 import { randomUUID } from 'node:crypto';
 import { setProject, getProject } from './state';
+import Store from 'electron-store';
+
+// Initialize electron-store for AI configuration
+interface AIConfigStore {
+    aiConfig: {
+        provider: 'openai' | 'claude' | 'gemini';
+        apiKey: string;
+        complexModel: string;
+        simpleModel: string;
+    } | null;
+}
+
+const store = new Store<AIConfigStore>({
+    name: 'talos-config',
+    defaults: {
+        aiConfig: null
+    },
+    encryptionKey: 'talos-ai-secure-key-2024' // Basic encryption for API keys
+});
 
 // Mapping of hex-encoded path (ID) to actual path
 const getPathFromId = (id: string) => Buffer.from(id, 'hex').toString('utf-8');
@@ -502,5 +521,38 @@ export function setupHandlers(mainWindow: BrowserWindow) {
             }
         }
         throw new Error("Run not found");
+    });
+
+    // AI Configuration Handlers
+    ipcMain.handle('ai-config:get', async () => {
+        try {
+            const config = store.get('aiConfig');
+            return config || null;
+        } catch (error) {
+            console.error('Failed to get AI config:', error);
+            return null;
+        }
+    });
+
+    ipcMain.handle('ai-config:save', async (_, config) => {
+        try {
+            store.set('aiConfig', config);
+            console.log('[handlers] AI config saved successfully');
+            return config;
+        } catch (error) {
+            console.error('Failed to save AI config:', error);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('ai-config:clear', async () => {
+        try {
+            store.delete('aiConfig');
+            console.log('[handlers] AI config cleared');
+            return null;
+        } catch (error) {
+            console.error('Failed to clear AI config:', error);
+            throw error;
+        }
     });
 }

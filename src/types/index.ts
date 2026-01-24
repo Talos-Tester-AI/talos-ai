@@ -1,3 +1,47 @@
+// AI Configuration Types
+export type AIProvider = 'openai' | 'claude' | 'gemini';
+
+export interface AIModelOption {
+  id: string;
+  name: string;
+  category: 'complex' | 'simple';
+}
+
+export interface AIConfig {
+  provider: AIProvider;
+  apiKey: string;
+  complexModel: string;
+  simpleModel: string;
+}
+
+export const AI_MODELS: Record<AIProvider, AIModelOption[]> = {
+  openai: [
+    { id: 'gpt-4o', name: 'GPT-4o', category: 'complex' },
+    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', category: 'complex' },
+    { id: 'o1', name: 'O1', category: 'complex' },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', category: 'simple' },
+    { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', category: 'simple' },
+  ],
+  claude: [
+    { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', category: 'complex' },
+    { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', category: 'complex' },
+    { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', category: 'simple' },
+    { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku', category: 'simple' },
+  ],
+  gemini: [
+    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash', category: 'complex' },
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', category: 'complex' },
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', category: 'simple' },
+    { id: 'gemini-1.5-flash-8b', name: 'Gemini 1.5 Flash 8B', category: 'simple' },
+  ],
+};
+
+export const AI_PROVIDER_NAMES: Record<AIProvider, string> = {
+  openai: 'OpenAI',
+  claude: 'Claude (Anthropic)',
+  gemini: 'Gemini (Google)',
+};
+
 export interface LaunchConfiguration {
   _id?: string;
   name: string;

@@ -1,9 +1,11 @@
 import { configureStore } from '@reduxjs/toolkit';
 import projectReducer from './slices/projectSlice';
+import aiConfigReducer from './slices/aiConfigSlice';
 
 export const store = configureStore({
     reducer: {
         project: projectReducer,
+        aiConfig: aiConfigReducer,
     },
 });
 

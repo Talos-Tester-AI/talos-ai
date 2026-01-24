@@ -7,7 +7,8 @@ import type {
   TestCaseRun,
   TestRun,
   TestRunConfig,
-  SelectedTestCase
+  SelectedTestCase,
+  AIConfig
 } from '../types';
 
 // Wrapper to mimic Axios response
@@ -89,3 +90,8 @@ export const uploadImage = (projectId: string, file: File) => {
 // Electron Specific
 export const selectProjectFolder = () => invoke<Project>('project:select');
 export const browseDirectory = () => invoke<string | null>('dialog:browse');
+
+// AI Configuration
+export const getAIConfig = () => invoke<AIConfig | null>('ai-config:get');
+export const saveAIConfig = (config: AIConfig) => invoke<AIConfig>('ai-config:save', config);
+export const clearAIConfig = () => invoke<void>('ai-config:clear');
