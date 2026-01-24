@@ -1,18 +1,21 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import { getProject, updateProject } from '../api/client';
 import { Button } from '../components/Button';
 import { LaunchConfigEditor } from '../components/LaunchConfigEditor';
 import type { LaunchConfig } from '../components/LaunchConfigEditor';
-import type { Project, LaunchConfiguration } from '../types';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { createLaunchConfigThunk, updateLaunchConfigThunk } from '../store/slices/projectSlice';
+import type { RootState } from '../store';
 
 export const LaunchConfigFormPage = () => {
     const { id, configId } = useParams<{ id: string; configId?: string }>();
     const navigate = useNavigate();
-    const [project, setProject] = useState<Project | null>(null);
-    const [loading, setLoading] = useState(true);
-
+    const dispatch = useAppDispatch();
+    
+    // GET DATA FROM REDUX - NO API CALLS!
+    const { currentProject: project, loading } = useAppSelector((state: RootState) => state.project);
+    
     const [formData, setFormData] = useState<LaunchConfig>({
         name: '',
         type: 'node',
@@ -24,100 +27,70 @@ export const LaunchConfigFormPage = () => {
         options: {}
     });
 
+    // Initialize form data from Redux when editing existing config
     useEffect(() => {
-        if (id) {
-            loadData();
-        }
-    }, [id, configId]);
-
-    const loadData = async () => {
-        try {
-            console.log('[Form] Loading project data...');
-            const res = await getProject(id!);
-            console.log('[Form] Project loaded:', res.data);
-            setProject(res.data);
-
-            if (configId) {
-                console.log(`[Form] Finding config for ID: ${configId}`);
-                if (res.data.launchConfigurations) {
-                    const config = res.data.launchConfigurations.find(c => c._id === configId);
-                    console.log('[Form] Found config:', config);
-
-                    if (config) {
-                        // Normalize data structure for Editor
-                        let env: Record<string, string> = {};
-                        if (config.env) {
-                            if (config.env instanceof Map) {
-                                config.env.forEach((v, k) => env[k] = String(v));
-                            } else {
-                                Object.entries(config.env).forEach(([k, v]) => env[k] = String(v));
-                            }
-                        }
-
-                        const newForm = {
-                            _id: config._id,
-                            name: config.name || '',
-                            type: config.type || 'node',
-                            request: config.request || 'launch',
-                            program: config.program || '',
-                            cwd: config.cwd || '${workspaceFolder}',
-                            args: config.args || [],
-                            env: env,
-                            options: config.options || {}
-                        };
-                        console.log('[Form] Setting formData to:', newForm);
-                        setFormData(newForm);
+        if (configId && project?.launchConfigurations) {
+            console.log('[Form] Finding config for ID from Redux:', configId);
+            const config = project.launchConfigurations.find(c => c._id === configId);
+            
+            if (config) {
+                console.log('[Form] Found config in Redux:', config);
+                
+                // Normalize data structure for Editor
+                let env: Record<string, string> = {};
+                if (config.env) {
+                    if (config.env instanceof Map) {
+                        config.env.forEach((v, k) => env[k] = String(v));
                     } else {
-                        console.warn('[Form] Config not found in project!');
+                        Object.entries(config.env).forEach(([k, v]) => env[k] = String(v));
                     }
-                } else {
-                    console.warn('[Form] Project has no launchConfigurations');
                 }
+
+                setFormData({
+                    _id: config._id,
+                    name: config.name || '',
+                    type: config.type || 'node',
+                    request: config.request || 'launch',
+                    program: config.program || '',
+                    cwd: config.cwd || '${workspaceFolder}',
+                    args: config.args || [],
+                    env: env,
+                    options: config.options || {}
+                });
+            } else {
+                console.warn('[Form] Config not found in Redux!');
             }
-        } catch (error) {
-            console.error('Failed to load project:', error);
-        } finally {
-            setLoading(false);
         }
-    };
+    }, [configId, project?.launchConfigurations]);
 
     const handleEditorChange = (config: LaunchConfig) => {
         console.log('[Form] Config update received:', config);
         setFormData(config);
     };
 
-    // Safe UUID generator
-    const generateId = () => {
-        return Date.now().toString(36) + Math.random().toString(36).substr(2);
-    };
-
     const handleSubmit = async () => {
         if (!project) return;
 
-        // Cast back to application type if needed, or rely on compatibility
-        const newConfig: LaunchConfiguration = {
-            ...formData,
-            env: formData.env // Ensure record is passed
-        };
-
-        // Debug logging
-        console.log('Saving config:', newConfig);
-
-        // Generate basic ID if new
-        let updatedConfigs = [...(project.launchConfigurations || [])];
-
-        if (configId) {
-            updatedConfigs = updatedConfigs.map(c => c._id === configId ? { ...newConfig, _id: configId } : c);
-        } else {
-            const newId = generateId();
-            console.log('[Form] Generated new ID:', newId);
-            updatedConfigs.push({ ...newConfig, _id: newId });
-        }
-
-        console.log('[Form] Final configs list to save:', updatedConfigs);
+        console.log('[Form] Saving config via REDUX');
 
         try {
-            await updateProject(project._id, { launchConfigurations: updatedConfigs });
+            if (configId) {
+                // UPDATE existing config via Redux
+                console.log('[Form] Updating existing config:', configId);
+                await dispatch(updateLaunchConfigThunk({
+                    projectId: project._id,
+                    configId,
+                    data: formData
+                })).unwrap();
+            } else {
+                // CREATE new config via Redux
+                console.log('[Form] Creating new config');
+                await dispatch(createLaunchConfigThunk({
+                    projectId: project._id,
+                    data: formData
+                })).unwrap();
+            }
+            
             console.log('[Form] Save successful, navigating...');
             navigate(`/projects/${id}/launch-configs`);
         } catch (error) {
@@ -126,7 +99,7 @@ export const LaunchConfigFormPage = () => {
         }
     };
 
-    if (loading) return <div className="text-center py-12">Loading...</div>;
+    if (loading && !project) return <div className="text-center py-12">Loading...</div>;
     if (!project) return <div className="text-center py-12">Project not found</div>;
 
     return (

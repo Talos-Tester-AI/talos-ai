@@ -4,7 +4,7 @@ import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import type { LaunchConfiguration } from '../types';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { updateProjectThunk } from '../store/slices/projectSlice';
+import { deleteLaunchConfigThunk } from '../store/slices/projectSlice';
 import type { RootState } from '../store';
 
 export const LaunchConfigListPage = () => {
@@ -16,10 +16,10 @@ export const LaunchConfigListPage = () => {
         if (!project || !window.confirm('Are you sure you want to delete this configuration?')) return;
 
         try {
-            const updatedConfigs = project.launchConfigurations?.filter((c: LaunchConfiguration) => c._id !== configId) || [];
-            await dispatch(updateProjectThunk({
-                id: project._id,
-                data: { launchConfigurations: updatedConfigs }
+            console.log('[LaunchConfigList] Deleting config via REDUX:', configId);
+            await dispatch(deleteLaunchConfigThunk({
+                projectId: project._id,
+                configId
             })).unwrap();
         } catch (error) {
             console.error('Failed to delete configuration:', error);

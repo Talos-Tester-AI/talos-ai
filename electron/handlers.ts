@@ -921,4 +921,102 @@ export function setupHandlers(mainWindow: BrowserWindow) {
             throw error;
         }
     });
+
+    // ============================================================================
+    // LAUNCH CONFIGURATION HANDLERS - Background persistence for Redux-first pattern
+    // ============================================================================
+
+    // Create launch config (called from Redux thunk for background persistence)
+    ipcMain.handle('launchConfig:create', async (_, projectId, config) => {
+        try {
+            console.log('[handlers] launchConfig:create - Persisting new config to disk');
+            
+            const projectPath = getPathFromId(projectId);
+            const planPath = path.join(projectPath, 'test-plan', 'plan.json');
+            
+            if (!await fs.pathExists(planPath)) {
+                throw new Error('Project plan file not found');
+            }
+            
+            const plan = await fs.readJson(planPath) as Plan;
+            
+            // Add the new config to launchConfigurations array
+            const configs = plan.project.launchConfigurations || [];
+            plan.project.launchConfigurations = [...configs, config];
+            plan.project.updatedAt = new Date().toISOString();
+            
+            await fs.writeJson(planPath, plan, { spaces: 2 });
+            console.log('[handlers] launchConfig:create - Persisted config:', config._id);
+            
+            return config;
+        } catch (error) {
+            console.error('[handlers] launchConfig:create failed:', error);
+            throw error;
+        }
+    });
+
+    // Update launch config (called from Redux thunk for background persistence)
+    ipcMain.handle('launchConfig:update', async (_, projectId, configId, data) => {
+        try {
+            console.log('[handlers] launchConfig:update - Persisting config update to disk:', configId);
+            
+            const projectPath = getPathFromId(projectId);
+            const planPath = path.join(projectPath, 'test-plan', 'plan.json');
+            
+            if (!await fs.pathExists(planPath)) {
+                throw new Error('Project plan file not found');
+            }
+            
+            const plan = await fs.readJson(planPath) as Plan;
+            
+            // Find and update the config
+            const configs = (plan.project.launchConfigurations || []) as Array<{ _id?: string; [key: string]: unknown }>;
+            const index = configs.findIndex(c => c._id === configId);
+            
+            if (index === -1) {
+                throw new Error('Launch config not found');
+            }
+            
+            configs[index] = { ...configs[index], ...data, _id: configId };
+            plan.project.launchConfigurations = configs;
+            plan.project.updatedAt = new Date().toISOString();
+            
+            await fs.writeJson(planPath, plan, { spaces: 2 });
+            console.log('[handlers] launchConfig:update - Persisted update for config:', configId);
+            
+            return configs[index];
+        } catch (error) {
+            console.error('[handlers] launchConfig:update failed:', error);
+            throw error;
+        }
+    });
+
+    // Delete launch config (called from Redux thunk for background persistence)
+    ipcMain.handle('launchConfig:delete', async (_, projectId, configId) => {
+        try {
+            console.log('[handlers] launchConfig:delete - Removing config from disk:', configId);
+            
+            const projectPath = getPathFromId(projectId);
+            const planPath = path.join(projectPath, 'test-plan', 'plan.json');
+            
+            if (!await fs.pathExists(planPath)) {
+                throw new Error('Project plan file not found');
+            }
+            
+            const plan = await fs.readJson(planPath) as Plan;
+            
+            // Remove the config
+            const configs = (plan.project.launchConfigurations || []) as Array<{ _id?: string; [key: string]: unknown }>;
+            plan.project.launchConfigurations = configs.filter(c => c._id !== configId);
+            plan.project.updatedAt = new Date().toISOString();
+            
+            await fs.writeJson(planPath, plan, { spaces: 2 });
+            console.log('[handlers] launchConfig:delete - Removed config:', configId);
+            
+            return { success: true };
+        } catch (error) {
+            console.error('[handlers] launchConfig:delete failed:', error);
+            throw error;
+        }
+    });
 }

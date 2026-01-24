@@ -1,7 +1,7 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import type { PayloadAction } from '@reduxjs/toolkit';
 import { getProject, getProjects, createProject, updateProject, getFeaturesByProject, getTestCasesByFeature } from '../../api/client';
-import type { Project, Feature, TestCase } from '../../types';
+import type { Project, Feature, TestCase, LaunchConfiguration } from '../../types';
 
 interface ProjectState {
     currentProject: Project | null;
@@ -263,6 +263,123 @@ export const deleteTestCaseThunk = createAsyncThunk(
     }
 );
 
+// ============================================================================
+// LAUNCH CONFIGURATION THUNKS - Redux FIRST, then disk
+// ============================================================================
+
+// Create launch config (updates Redux FIRST, then persists to disk in background)
+export const createLaunchConfigThunk = createAsyncThunk(
+    'project/createLaunchConfig',
+    async ({ projectId, data }: { projectId: string; data: Omit<LaunchConfiguration, '_id'> }, { getState, rejectWithValue }) => {
+        try {
+            console.log('[Redux] Creating launch config in Redux FIRST');
+            
+            // Get current project from Redux
+            const state = getState() as { project: ProjectState };
+            const currentProject = state.project.currentProject;
+            
+            if (!currentProject || currentProject._id !== projectId) {
+                throw new Error('Project not found in Redux');
+            }
+            
+            // Generate ID and create launch config object
+            const newConfig: LaunchConfiguration = {
+                _id: crypto.randomUUID(),
+                name: data.name,
+                type: data.type,
+                request: data.request,
+                program: data.program,
+                cwd: data.cwd,
+                args: data.args || [],
+                env: data.env || {},
+                options: data.options || {}
+            };
+            
+            // Persist to disk in background (fire and forget for UI responsiveness)
+            window.electron.ipcRenderer.invoke('launchConfig:create', projectId, newConfig).catch((error) => {
+                console.error('[Redux] Background persist failed:', error);
+            });
+            
+            // Return new config to Redux immediately
+            return { projectId, config: newConfig };
+        } catch (error: any) {
+            console.error('[Redux] Create launch config failed:', error);
+            return rejectWithValue(error.message || 'Failed to create launch config');
+        }
+    }
+);
+
+// Update launch config (updates Redux FIRST, then persists to disk in background)
+export const updateLaunchConfigThunk = createAsyncThunk(
+    'project/updateLaunchConfig',
+    async ({ projectId, configId, data }: { projectId: string; configId: string; data: Partial<LaunchConfiguration> }, { getState, rejectWithValue }) => {
+        try {
+            console.log('[Redux] Updating launch config in Redux FIRST:', configId);
+            
+            // Get current project from Redux
+            const state = getState() as { project: ProjectState };
+            const currentProject = state.project.currentProject;
+            
+            if (!currentProject || currentProject._id !== projectId) {
+                throw new Error('Project not found in Redux');
+            }
+            
+            // Find the existing config
+            const existingConfig = currentProject.launchConfigurations?.find(c => c._id === configId);
+            if (!existingConfig) {
+                throw new Error('Launch config not found in Redux');
+            }
+            
+            // Merge the update with existing data
+            const updatedConfig: LaunchConfiguration = { 
+                ...existingConfig, 
+                ...data,
+                _id: configId // Ensure ID is preserved
+            };
+            
+            // Persist to disk in background (fire and forget for UI responsiveness)
+            window.electron.ipcRenderer.invoke('launchConfig:update', projectId, configId, data).catch((error) => {
+                console.error('[Redux] Background persist failed:', error);
+            });
+            
+            // Return updated config to Redux immediately
+            return { projectId, configId, config: updatedConfig };
+        } catch (error: any) {
+            console.error('[Redux] Update launch config failed:', error);
+            return rejectWithValue(error.message || 'Failed to update launch config');
+        }
+    }
+);
+
+// Delete launch config (updates Redux FIRST, then persists to disk in background)
+export const deleteLaunchConfigThunk = createAsyncThunk(
+    'project/deleteLaunchConfig',
+    async ({ projectId, configId }: { projectId: string; configId: string }, { getState, rejectWithValue }) => {
+        try {
+            console.log('[Redux] Deleting launch config from Redux FIRST:', configId);
+            
+            // Verify project exists in Redux
+            const state = getState() as { project: ProjectState };
+            const currentProject = state.project.currentProject;
+            
+            if (!currentProject || currentProject._id !== projectId) {
+                throw new Error('Project not found in Redux');
+            }
+            
+            // Persist to disk in background (fire and forget for UI responsiveness)
+            window.electron.ipcRenderer.invoke('launchConfig:delete', projectId, configId).catch((error) => {
+                console.error('[Redux] Background persist failed:', error);
+            });
+            
+            // Return configId to remove from Redux immediately
+            return { projectId, configId };
+        } catch (error: any) {
+            console.error('[Redux] Delete launch config failed:', error);
+            return rejectWithValue(error.message || 'Failed to delete launch config');
+        }
+    }
+);
+
 const projectSlice = createSlice({
     name: 'project',
     initialState,
@@ -398,6 +515,64 @@ const projectSlice = createSlice({
             state.testCases = state.testCases.filter(tc => tc._id !== action.payload);
         });
         builder.addCase(deleteTestCaseThunk.rejected, (state, action) => {
+            state.error = action.payload as string;
+        });
+
+        // Create launch config
+        builder.addCase(createLaunchConfigThunk.fulfilled, (state, action: PayloadAction<{ projectId: string; config: LaunchConfiguration }>) => {
+            console.log('[Redux] Launch config created:', action.payload.config._id);
+            if (state.currentProject && state.currentProject._id === action.payload.projectId) {
+                const configs = state.currentProject.launchConfigurations || [];
+                state.currentProject.launchConfigurations = [...configs, action.payload.config];
+            }
+            // Also update in projects list
+            const projectIndex = state.projects.findIndex(p => p._id === action.payload.projectId);
+            if (projectIndex >= 0) {
+                const configs = state.projects[projectIndex].launchConfigurations || [];
+                state.projects[projectIndex].launchConfigurations = [...configs, action.payload.config];
+            }
+        });
+        builder.addCase(createLaunchConfigThunk.rejected, (state, action) => {
+            state.error = action.payload as string;
+        });
+
+        // Update launch config
+        builder.addCase(updateLaunchConfigThunk.fulfilled, (state, action: PayloadAction<{ projectId: string; configId: string; config: LaunchConfiguration }>) => {
+            console.log('[Redux] Launch config updated:', action.payload.configId);
+            if (state.currentProject && state.currentProject._id === action.payload.projectId) {
+                const configs = state.currentProject.launchConfigurations || [];
+                state.currentProject.launchConfigurations = configs.map(c => 
+                    c._id === action.payload.configId ? action.payload.config : c
+                );
+            }
+            // Also update in projects list
+            const projectIndex = state.projects.findIndex(p => p._id === action.payload.projectId);
+            if (projectIndex >= 0) {
+                const configs = state.projects[projectIndex].launchConfigurations || [];
+                state.projects[projectIndex].launchConfigurations = configs.map(c => 
+                    c._id === action.payload.configId ? action.payload.config : c
+                );
+            }
+        });
+        builder.addCase(updateLaunchConfigThunk.rejected, (state, action) => {
+            state.error = action.payload as string;
+        });
+
+        // Delete launch config
+        builder.addCase(deleteLaunchConfigThunk.fulfilled, (state, action: PayloadAction<{ projectId: string; configId: string }>) => {
+            console.log('[Redux] Launch config deleted:', action.payload.configId);
+            if (state.currentProject && state.currentProject._id === action.payload.projectId) {
+                state.currentProject.launchConfigurations = (state.currentProject.launchConfigurations || [])
+                    .filter(c => c._id !== action.payload.configId);
+            }
+            // Also update in projects list
+            const projectIndex = state.projects.findIndex(p => p._id === action.payload.projectId);
+            if (projectIndex >= 0) {
+                state.projects[projectIndex].launchConfigurations = (state.projects[projectIndex].launchConfigurations || [])
+                    .filter(c => c._id !== action.payload.configId);
+            }
+        });
+        builder.addCase(deleteLaunchConfigThunk.rejected, (state, action) => {
             state.error = action.payload as string;
         });
     },
