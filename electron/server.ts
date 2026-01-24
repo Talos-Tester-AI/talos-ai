@@ -3,6 +3,7 @@ import cors from 'cors';
 import bodyParser from 'body-parser';
 import path from 'node:path';
 import fs from 'fs-extra';
+import crypto from 'node:crypto';
 import Store from 'electron-store';
 import { getProject } from './state';
 import { BrowserWindow } from 'electron';
@@ -452,13 +453,47 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
             // Read existing plan
             const plan = await fs.readJson(planPath);
 
-            // Merge proposal into plan
+            // MIGRATE AI FORMAT (nested) to REDUX FORMAT (flat)
+            const newFeatures: any[] = [];
+            const newTestCases: any[] = [];
+
             if (proposal.features) {
-                plan.features = [...(plan.features || []), ...proposal.features];
+                for (const feature of proposal.features) {
+                    // Generate feature ID
+                    const featureId = crypto.randomBytes(12).toString('hex');
+                    
+                    // Add feature WITHOUT nested test cases
+                    newFeatures.push({
+                        _id: featureId,
+                        name: feature.name || feature.title,
+                        description: feature.description || '',
+                        status: feature.status || 'NEW',
+                        projectId: plan.project?._id || id,
+                        globalSetup: feature.globalSetup,
+                        globalTeardown: feature.globalTeardown
+                    });
+                    
+                    // Extract test cases and link to feature
+                    if (feature.testCases && Array.isArray(feature.testCases)) {
+                        for (const tc of feature.testCases) {
+                            newTestCases.push({
+                                _id: crypto.randomBytes(12).toString('hex'),
+                                featureId: featureId,
+                                title: tc.title,
+                                description: tc.description || '',
+                                status: tc.status || 'NEW',
+                                steps: tc.steps || [],
+                                localSetup: tc.localSetup,
+                                localTeardown: tc.localTeardown
+                            });
+                        }
+                    }
+                }
             }
-            if (proposal.testCases) {
-                plan.testCases = [...(plan.testCases || []), ...proposal.testCases];
-            }
+
+            // Merge into plan
+            plan.features = [...(plan.features || []), ...newFeatures];
+            plan.testCases = [...(plan.testCases || []), ...newTestCases];
 
             // Save updated plan
             await fs.writeJson(planPath, plan, { spaces: 2 });

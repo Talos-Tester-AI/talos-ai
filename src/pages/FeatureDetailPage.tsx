@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Plus, ArrowLeft, FlaskConical, ClipboardList, Play, CheckCircle2, Pencil, Save, X, Trash2, ZoomIn, ZoomOut, RotateCcw, Move } from 'lucide-react';
-import { getFeature, getTestCasesByFeature, createTestCase, updateFeature, updateTestCase, deleteTestCase, deleteFeature, reorderTestCases } from '../api/client';
-import type { Feature, TestCase } from '../types';
+import { reorderTestCases } from '../api/client';
+import type { TestCase } from '../types';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
@@ -13,6 +13,8 @@ import { ImageUpload } from '../components/ImageUpload';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, rectSortingStrategy, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { useAppSelector, useAppDispatch } from '../store/hooks';
+import { updateTestCaseThunk, createTestCaseThunk, deleteTestCaseThunk, updateFeatureThunk, deleteFeatureThunk } from '../store/slices/projectSlice';
 
 interface TestCaseFormData {
   _id?: string;
@@ -318,9 +320,23 @@ const SortableStepRow = ({
 export const FeatureDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [feature, setFeature] = useState<Feature | null>(null);
-  const [testCases, setTestCases] = useState<TestCase[]>([]);
-  const [loading, setLoading] = useState(true);
+  const dispatch = useAppDispatch();
+  
+  // GET DATA FROM REDUX - NO IPC CALLS!
+  const { features, testCases: allTestCases, loading } = useAppSelector((state) => state.project);
+  
+  console.log('[FeatureDetailPage] Looking for feature ID:', id);
+  console.log('[FeatureDetailPage] Redux has', features.length, 'features:', features.map(f => f._id));
+  
+  const feature = features.find(f => f._id === id) || null;
+  const testCases = allTestCases.filter(tc => tc.featureId === id);
+  
+  if (!feature && id) {
+    console.error('[FeatureDetailPage] FEATURE NOT FOUND IN REDUX');
+    console.error('[FeatureDetailPage] Searching for:', id);
+    console.error('[FeatureDetailPage] Available features:', features);
+  }
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedTestCase, setSelectedTestCase] = useState<TestCase | null>(null);
 
@@ -392,10 +408,12 @@ export const FeatureDetailPage = () => {
         // Optimistic update
         setSelectedTestCase({ ...selectedTestCase, steps: newSteps });
 
-        // Persist
+        // Persist via Redux
         try {
-          await updateTestCase(selectedTestCase._id, { steps: newSteps });
-          loadData(); // Refresh to ensure sync
+          await dispatch(updateTestCaseThunk({ 
+            id: selectedTestCase._id, 
+            data: { steps: newSteps } 
+          })).unwrap();
         } catch (error) {
           console.error('Failed to reorder steps:', error);
           // Revert on error could be implemented here
@@ -403,19 +421,17 @@ export const FeatureDetailPage = () => {
 
       } else if (!activeId.startsWith('step-') && !overId.startsWith('step-')) {
         // Reordering Test Cases on the main page
-        setTestCases((items) => {
-          const oldIndex = items.findIndex((item) => item._id === active.id);
-          const newIndex = items.findIndex((item) => item._id === over.id);
+        const oldIndex = testCases.findIndex((item) => item._id === active.id);
+        const newIndex = testCases.findIndex((item) => item._id === over.id);
 
-          const newItems = arrayMove(items, oldIndex, newIndex);
+        if (oldIndex !== -1 && newIndex !== -1) {
+          const newItems = arrayMove(testCases, oldIndex, newIndex);
 
-          // Persist order
+          // Persist order (just reordering, no Redux update needed - it's display order only)
           if (feature) {
-            reorderTestCases(feature._id, newItems.map((i: TestCase) => i._id));
+            reorderTestCases(feature._id, newItems.map((i) => i._id));
           }
-
-          return newItems;
-        });
+        }
       }
     }
   };
@@ -423,10 +439,13 @@ export const FeatureDetailPage = () => {
   const handleTitleSave = async () => {
     if (!selectedTestCase || !titleFormData.trim()) return;
     try {
-      await updateTestCase(selectedTestCase._id, { title: titleFormData });
+      console.log('[FeatureDetailPage] Updating title via REDUX');
+      await dispatch(updateTestCaseThunk({ 
+        id: selectedTestCase._id, 
+        data: { title: titleFormData } 
+      })).unwrap();
       setSelectedTestCase({ ...selectedTestCase, title: titleFormData });
       setIsEditingTitle(false);
-      loadData();
     } catch (error) {
       console.error('Failed to update title:', error);
     }
@@ -453,56 +472,44 @@ export const FeatureDetailPage = () => {
   });
 
   useEffect(() => {
-    if (id) {
-      loadData();
+    // Initialize feature form data from Redux
+    if (feature) {
+      console.log('[FeatureDetailPage] Feature loaded from Redux:', feature.name);
+      setFeatureFormData({
+        name: feature.name,
+        description: feature.description || '',
+        globalSetup: feature.globalSetup?.instruction || '',
+        globalSetupWaitTimeMs: feature.globalSetup?.waitTimeMs || 0,
+        globalTeardown: feature.globalTeardown?.instruction || '',
+        globalTeardownWaitTimeMs: feature.globalTeardown?.waitTimeMs || 0
+      });
+    } else if (id && id !== 'undefined') {
+      console.warn('[FeatureDetailPage] Feature not found in Redux for ID:', id);
     }
-  }, [id]);
-
-  const loadData = async () => {
-    try {
-      const [featureRes, testCasesRes] = await Promise.all([
-        getFeature(id!),
-        getTestCasesByFeature(id!)
-      ]);
-      setFeature(featureRes.data);
-      setTestCases(testCasesRes.data);
-
-      // Initialize feature form data
-      if (featureRes.data) {
-        setFeatureFormData({
-          name: featureRes.data.name,
-          description: featureRes.data.description || '',
-          globalSetup: featureRes.data.globalSetup?.instruction || '',
-          globalSetupWaitTimeMs: featureRes.data.globalSetup?.waitTimeMs || 0,
-          globalTeardown: featureRes.data.globalTeardown?.instruction || '',
-          globalTeardownWaitTimeMs: featureRes.data.globalTeardown?.waitTimeMs || 0
-        });
-      }
-    } catch (error) {
-      console.error('Failed to load data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [feature, id]);
 
   const handleFeatureUpdate = async () => {
     if (!feature) return;
 
     try {
-      await updateFeature(feature._id, {
-        name: featureFormData.name,
-        description: featureFormData.description,
-        globalSetup: featureFormData.globalSetup ? {
-          instruction: featureFormData.globalSetup,
-          waitTimeMs: featureFormData.globalSetupWaitTimeMs
-        } : null as any,
-        globalTeardown: featureFormData.globalTeardown ? {
-          instruction: featureFormData.globalTeardown,
-          waitTimeMs: featureFormData.globalTeardownWaitTimeMs
-        } : null as any
-      });
+      console.log('[FeatureDetailPage] Updating feature via REDUX');
+      // UPDATE VIA REDUX
+      await dispatch(updateFeatureThunk({
+        id: feature._id,
+        data: {
+          name: featureFormData.name,
+          description: featureFormData.description,
+          globalSetup: featureFormData.globalSetup ? {
+            instruction: featureFormData.globalSetup,
+            waitTimeMs: featureFormData.globalSetupWaitTimeMs
+          } : null as any,
+          globalTeardown: featureFormData.globalTeardown ? {
+            instruction: featureFormData.globalTeardown,
+            waitTimeMs: featureFormData.globalTeardownWaitTimeMs
+          } : null as any
+        }
+      })).unwrap();
       setIsEditingFeature(false);
-      loadData();
     } catch (error) {
       console.error('Failed to update feature:', error);
     }
@@ -526,13 +533,20 @@ export const FeatureDetailPage = () => {
       };
 
       if (formData._id) {
-        await updateTestCase(formData._id, sanitizedData);
+        console.log('[FeatureDetailPage] Updating test case via REDUX');
+        await dispatch(updateTestCaseThunk({ 
+          id: formData._id, 
+          data: sanitizedData 
+        })).unwrap();
       } else {
-        await createTestCase(id!, sanitizedData);
+        console.log('[FeatureDetailPage] Creating test case via REDUX');
+        await dispatch(createTestCaseThunk({ 
+          featureId: id!, 
+          data: sanitizedData 
+        })).unwrap();
       }
       setIsModalOpen(false);
       resetFormData();
-      loadData();
     } catch (error: any) {
       console.error('Failed to save test case:', error);
       setSubmitError(error.response?.data?.message || error.message || 'Failed to save test case');
@@ -544,9 +558,9 @@ export const FeatureDetailPage = () => {
   const handleDeleteTestCase = async (testCaseId: string) => {
     if (!confirm('Are you sure you want to delete this test case?')) return;
     try {
-      await deleteTestCase(testCaseId);
+      console.log('[FeatureDetailPage] Deleting test case via REDUX');
+      await dispatch(deleteTestCaseThunk(testCaseId)).unwrap();
       setSelectedTestCase(null);
-      loadData();
     } catch (error) {
       console.error('Failed to delete test case:', error);
     }
@@ -993,10 +1007,7 @@ export const FeatureDetailPage = () => {
                       setStepToDelete={setStepToDelete}
                       setModalImage={setModalImage}
                       handleSaveStep={async (idx) => {
-                        // Reusing the logic from the specialized component requires passing it down or refactoring
-                        // But we passed handleSaveStep prop, so let's implement the localized saver here
-                        // This is a duplicate of the logic inside the map previously, extracted to a prop
-                        console.log('=== STEP SAVE DEBUG START ===');
+                        console.log('[FeatureDetailPage] Saving step via REDUX');
                         const updatedSteps = [...selectedTestCase.steps];
                         updatedSteps[idx] = {
                           ...updatedSteps[idx],
@@ -1006,10 +1017,15 @@ export const FeatureDetailPage = () => {
                           waitTimeMs: stepFormData.waitTimeMs
                         };
                         try {
-                          await updateTestCase(selectedTestCase._id, { steps: updatedSteps });
+                          // UPDATE VIA REDUX THUNK - updates Redux AND persists to backend
+                          await dispatch(updateTestCaseThunk({ 
+                            id: selectedTestCase._id, 
+                            data: { steps: updatedSteps } 
+                          })).unwrap();
+                          
+                          // Update local state to reflect the change immediately
                           setSelectedTestCase({ ...selectedTestCase, steps: updatedSteps });
                           setEditingStepIndex(null);
-                          loadData();
                         } catch (error) {
                           console.error('Failed to update step:', error);
                         }
@@ -1027,7 +1043,12 @@ export const FeatureDetailPage = () => {
                         const reorderedSteps = newSteps.map((s, i) => ({ ...s, order: i + 1 }));
 
                         try {
-                          await updateTestCase(selectedTestCase._id, { steps: reorderedSteps });
+                          // UPDATE VIA REDUX
+                          await dispatch(updateTestCaseThunk({ 
+                            id: selectedTestCase._id, 
+                            data: { steps: reorderedSteps } 
+                          })).unwrap();
+                          
                           setSelectedTestCase({ ...selectedTestCase, steps: reorderedSteps });
                           // Automatically edit the new step
                           setEditingStepIndex(index);
@@ -1049,7 +1070,12 @@ export const FeatureDetailPage = () => {
                         const reorderedSteps = newSteps.map((s, i) => ({ ...s, order: i + 1 }));
 
                         try {
-                          await updateTestCase(selectedTestCase._id, { steps: reorderedSteps });
+                          // UPDATE VIA REDUX
+                          await dispatch(updateTestCaseThunk({ 
+                            id: selectedTestCase._id, 
+                            data: { steps: reorderedSteps } 
+                          })).unwrap();
+                          
                           setSelectedTestCase({ ...selectedTestCase, steps: reorderedSteps });
                           // Automatically edit the new step
                           setEditingStepIndex(index + 1);
@@ -1087,9 +1113,12 @@ export const FeatureDetailPage = () => {
               .filter((_, i) => i !== stepToDelete)
               .map((step, i) => ({ ...step, order: i + 1 }));
             try {
-              await updateTestCase(selectedTestCase._id, { steps: updatedSteps });
+              console.log('[FeatureDetailPage] Deleting step via REDUX');
+              await dispatch(updateTestCaseThunk({ 
+                id: selectedTestCase._id, 
+                data: { steps: updatedSteps } 
+              })).unwrap();
               setSelectedTestCase({ ...selectedTestCase, steps: updatedSteps });
-              loadData();
             } catch (error) {
               console.error('Failed to delete step:', error);
             }
@@ -1106,7 +1135,8 @@ export const FeatureDetailPage = () => {
         onConfirm={async () => {
           if (feature) {
             try {
-              await deleteFeature(feature._id);
+              console.log('[FeatureDetailPage] Deleting feature via REDUX');
+              await dispatch(deleteFeatureThunk(feature._id)).unwrap();
               navigate(`/projects/${feature.projectId}`);
             } catch (error) {
               console.error('Failed to delete feature:', error);

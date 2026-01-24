@@ -8,7 +8,7 @@ import { Modal } from '../components/Modal';
 import { Input } from '../components/Input';
 import { Textarea } from '../components/Textarea';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { fetchProjects, createProjectThunk } from '../store/slices/projectSlice';
+import { fetchProjects, createProjectThunk, fetchProject } from '../store/slices/projectSlice';
 
 export const ProjectsPage = () => {
   const navigate = useNavigate();
@@ -68,10 +68,17 @@ export const ProjectsPage = () => {
       console.log('[ProjectsPage] Dialog response:', response);
       
       if (response.data) {
-        console.log('[ProjectsPage] Project selected, navigating to:', response.data._id);
-        // Reload projects list to include the newly opened project
-        await dispatch(fetchProjects());
-        navigate(`/projects/${response.data._id}`);
+        const projectId = response.data._id;
+        console.log('[ProjectsPage] Project selected:', projectId);
+        
+        // IMMEDIATELY LOAD THE ENTIRE PROJECT INTO REDUX - WAIT FOR IT!
+        console.log('[ProjectsPage] LOADING PROJECT INTO REDUX WITH ALL DATA');
+        await dispatch(fetchProjects()).unwrap();
+        await dispatch(fetchProject(projectId)).unwrap();
+        console.log('[ProjectsPage] Redux loaded, now navigating');
+        
+        // Now navigate
+        navigate(`/projects/${projectId}`);
       } else {
         console.log('[ProjectsPage] No project selected (user cancelled)');
       }
@@ -114,7 +121,12 @@ export const ProjectsPage = () => {
             <Card
               key={project._id}
               hoverable
-              onClick={() => navigate(`/projects/${project._id}`)}
+              onClick={async () => {
+                console.log('[ProjectsPage] LOADING PROJECT INTO REDUX:', project._id);
+                await dispatch(fetchProject(project._id)).unwrap();
+                console.log('[ProjectsPage] Redux loaded, navigating');
+                navigate(`/projects/${project._id}`);
+              }}
             >
               <div className="flex items-start mb-3">
                 <FolderOpen className="text-blue-600 mr-3 flex-shrink-0" size={24} />

@@ -17,6 +17,13 @@ if (process.platform === 'linux') {
     // Use software rendering instead of GPU
     app.commandLine.appendSwitch('disable-gpu')
     app.commandLine.appendSwitch('disable-gpu-compositing')
+    app.commandLine.appendSwitch('disable-software-rasterizer')
+    app.commandLine.appendSwitch('--no-sandbox')
+    app.commandLine.appendSwitch('--disable-gpu-sandbox')
+    app.commandLine.appendSwitch('--disable-dev-shm-usage')
+    
+    // Ignore GPU blocklist
+    app.commandLine.appendSwitch('ignore-gpu-blocklist')
 }
 
 // Ensure single instance to prevent D-Bus conflicts

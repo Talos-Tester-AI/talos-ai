@@ -6,6 +6,38 @@ import { setProject, getProject } from './state';
 import { addProjectToStore, getProjectsFromStore, removeProjectFromStore, updateProjectInStore } from './projectStore';
 import Store from 'electron-store';
 
+// Type definitions for plan structure
+interface Feature {
+    _id: string;
+    name: string;
+    projectId?: string;
+    [key: string]: unknown;
+}
+
+interface TestCase {
+    _id: string;
+    featureId: string;
+    projectId?: string;
+    [key: string]: unknown;
+}
+
+interface ProjectData {
+    _id?: string;
+    name?: string;
+    baseUrl?: string;
+    systemContext?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    launchConfigurations?: unknown[];
+    [key: string]: unknown;
+}
+
+interface Plan {
+    project: ProjectData;
+    features?: Feature[];
+    testCases?: TestCase[];
+}
+
 // Executor configuration
 const EXECUTOR_URL = process.env.EXECUTOR_URL || 'http://localhost:8000';
 
@@ -315,13 +347,32 @@ export function setupHandlers(mainWindow: BrowserWindow) {
 
     // Project Select (Existing)
 
-    // Get Project
+    // Get Project (just metadata)
     ipcMain.handle('project:get', async (_, id) => {
         const projectPath = getPathFromId(id);
         const planPath = path.join(projectPath, 'test-plan', 'plan.json');
         if (!await fs.pathExists(planPath)) throw new Error('Project not found');
         const plan = await fs.readJson(planPath);
         return { ...plan.project, _id: id };
+    });
+
+    // Get FULL Project (project + features + testCases) - ONE CALL FOR REDUX
+    ipcMain.handle('project:getFull', async (_, id) => {
+        console.log('[handlers] project:getFull - Loading EVERYTHING for project:', id);
+        const projectPath = getPathFromId(id);
+        const planPath = path.join(projectPath, 'test-plan', 'plan.json');
+        if (!await fs.pathExists(planPath)) throw new Error('Project not found');
+        
+        const plan = await fs.readJson(planPath) as Plan;
+        
+        const result = {
+            project: { ...plan.project, _id: id },
+            features: plan.features || [],
+            testCases: plan.testCases || []
+        };
+        
+        console.log('[handlers] project:getFull - Returning', result.features.length, 'features and', result.testCases.length, 'test cases');
+        return result;
     });
 
     // List all known projects from persistent storage
@@ -343,21 +394,22 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         if (!currentProject) throw new Error("No project selected");
 
         const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
-        const plan = await fs.readJson(planPath);
+        const plan = await fs.readJson(planPath) as Plan;
 
         // Sort features based on the new order of IDs
-        const newFeatures = [];
-        const featureMap = new Map(plan.features.map((f: any) => [f._id, f]));
+        const newFeatures: Feature[] = [];
+        const featureMap = new Map((plan.features || []).map((f) => [f._id, f]));
 
         for (const id of featureIds) {
             if (featureMap.has(id)) {
-                newFeatures.push(featureMap.get(id));
+                const feature = featureMap.get(id);
+                if (feature) newFeatures.push(feature);
                 featureMap.delete(id);
             }
         }
 
         // Append any remaining features (shouldn't happen usually but good for safety)
-        for (const [_, f] of featureMap) {
+        for (const [, f] of featureMap) {
             newFeatures.push(f);
         }
 
@@ -368,14 +420,50 @@ export function setupHandlers(mainWindow: BrowserWindow) {
 
     // Feature Get
     ipcMain.handle('feature:get', async (_, id) => {
-        const currentProject = getProject();
-        if (!currentProject) throw new Error("No project selected");
+        console.log('[handlers] feature:get called for ID:', id);
+        let currentProject = getProject();
+        
+        // If no project is selected, try to find the project containing this feature
+        if (!currentProject) {
+            console.log('[handlers] No current project, searching all known projects...');
+            const projects = await getProjectsFromStore();
+            console.log('[handlers] Found', projects.length, 'projects in store');
+            
+            for (const proj of projects) {
+                const planPath = path.join(proj.path, 'test-plan', 'plan.json');
+                console.log('[handlers] Checking project:', proj.name, 'at', planPath);
+                
+                if (await fs.pathExists(planPath)) {
+                    const plan = await fs.readJson(planPath) as Plan;
+                    console.log('[handlers] Project has', (plan.features || []).length, 'features');
+                    const feature = plan.features?.find((f) => f._id === id);
+                    if (feature) {
+                        // Found the feature! Set this as the active project
+                        console.log('[handlers] Found feature in project:', proj.name);
+                        setProject({ id: proj._id, path: proj.path });
+                        currentProject = getProject();
+                        break;
+                    }
+                } else {
+                    console.log('[handlers] Plan file does not exist at', planPath);
+                }
+            }
+            
+            if (!currentProject) {
+                console.error('[handlers] Feature not found in any project. Projects checked:', projects.length);
+                throw new Error("No project selected and feature not found in any known project");
+            }
+        }
 
         const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
-        const plan = await fs.readJson(planPath);
+        const plan = await fs.readJson(planPath) as Plan;
 
-        const feature = plan.features.find((f: any) => f._id === id);
-        if (!feature) throw new Error("Feature not found");
+        const feature = plan.features?.find((f) => f._id === id);
+        if (!feature) {
+            console.error('[handlers] Feature not found in current project plan');
+            throw new Error("Feature not found");
+        }
+        console.log('[handlers] Returning feature:', feature.name);
         return feature;
     });
 
@@ -404,14 +492,16 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         if (!currentProject) throw new Error("No project selected");
 
         const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
-        const plan = await fs.readJson(planPath);
+        const plan = await fs.readJson(planPath) as Plan;
 
-        const index = plan.features.findIndex((f: any) => f._id === id);
+        const index = plan.features?.findIndex((f) => f._id === id) ?? -1;
         if (index === -1) throw new Error("Feature not found");
 
-        plan.features[index] = { ...plan.features[index], ...data, updatedAt: new Date().toISOString() };
+        if (plan.features) {
+            plan.features[index] = { ...plan.features[index], ...data, updatedAt: new Date().toISOString() };
+        }
         await fs.writeJson(planPath, plan, { spaces: 2 });
-        return plan.features[index];
+        return plan.features?.[index];
     });
 
     // Feature Delete
@@ -419,23 +509,38 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         const currentProject = getProject();
         if (!currentProject) throw new Error("No project selected");
         const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
-        const plan = await fs.readJson(planPath);
+        const plan = await fs.readJson(planPath) as Plan;
 
-        plan.features = plan.features.filter((f: any) => f._id !== id);
+        plan.features = plan.features?.filter((f) => f._id !== id);
         // Also delete test cases?
-        plan.testCases = plan.testCases.filter((tc: any) => tc.featureId !== id);
+        plan.testCases = plan.testCases?.filter((tc) => tc.featureId !== id);
 
         await fs.writeJson(planPath, plan, { spaces: 2 });
         return { success: true };
     });
 
-    // Test Cases List
+    // Test Cases List - STATELESS, searches all projects
     ipcMain.handle('testcase:list', async (_, featureId) => {
-        const currentProject = getProject();
-        if (!currentProject) throw new Error("No project selected");
-        const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
-        const plan = await fs.readJson(planPath);
-        return plan.testCases ? plan.testCases.filter((tc: any) => tc.featureId === featureId) : [];
+        console.log('[handlers] testcase:list called for feature:', featureId);
+        
+        // Search ALL projects to find the one containing this feature
+        const projects = await getProjectsFromStore();
+        console.log('[handlers] Searching', projects.length, 'projects for feature', featureId);
+        
+        for (const proj of projects) {
+            const planPath = path.join(proj.path, 'test-plan', 'plan.json');
+            if (await fs.pathExists(planPath)) {
+                const plan = await fs.readJson(planPath) as Plan;
+                const feature = plan.features?.find((f) => f._id === featureId);
+                if (feature) {
+                    console.log('[handlers] Found feature in project:', proj.name, '- returning test cases');
+                    return plan.testCases?.filter((tc) => tc.featureId === featureId) || [];
+                }
+            }
+        }
+        
+        console.error('[handlers] Feature not found in any project:', featureId);
+        return [];
     });
 
     // Test Case Reorder
@@ -444,25 +549,26 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         if (!currentProject) throw new Error("No project selected");
 
         const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
-        const plan = await fs.readJson(planPath);
+        const plan = await fs.readJson(planPath) as Plan;
 
         // We only reorder test cases belonging to this feature.
         // Others must remain untouched.
-        const otherTestCases = plan.testCases.filter((tc: any) => tc.featureId !== featureId);
-        const featureTestCases = plan.testCases.filter((tc: any) => tc.featureId === featureId);
+        const otherTestCases = plan.testCases?.filter((tc) => tc.featureId !== featureId) || [];
+        const featureTestCases = plan.testCases?.filter((tc) => tc.featureId === featureId) || [];
 
-        const newFeatureTestCases = [];
-        const tcMap = new Map(featureTestCases.map((tc: any) => [tc._id, tc]));
+        const newFeatureTestCases: TestCase[] = [];
+        const tcMap = new Map(featureTestCases.map((tc) => [tc._id, tc]));
 
         for (const id of testCaseIds) {
             if (tcMap.has(id)) {
-                newFeatureTestCases.push(tcMap.get(id));
+                const tc = tcMap.get(id);
+                if (tc) newFeatureTestCases.push(tc);
                 tcMap.delete(id);
             }
         }
 
         // Append checks
-        for (const [_, tc] of tcMap) {
+        for (const [, tc] of tcMap) {
             newFeatureTestCases.push(tc);
         }
 
@@ -495,31 +601,72 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         return newTestCase;
     });
 
-    // Test Case Update
+    // Test Case Update (STATELESS - auto-discovers project)
     ipcMain.handle('testcase:update', async (_, id, data) => {
-        const currentProject = getProject();
-        if (!currentProject) throw new Error("No project selected");
-        const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
-        const plan = await fs.readJson(planPath);
-
-        const index = plan.testCases.findIndex((tc: any) => tc._id === id);
-        if (index === -1) throw new Error("Test Case not found");
-
-        plan.testCases[index] = { ...plan.testCases[index], ...data, updatedAt: new Date().toISOString() };
-        await fs.writeJson(planPath, plan, { spaces: 2 });
-        return plan.testCases[index];
+        console.log('[handlers] testcase:update - Searching for test case:', id);
+        
+        // Search all known projects to find the one containing this test case
+        const projects = await getProjectsFromStore();
+        
+        for (const proj of projects) {
+            try {
+                const planPath = path.join(proj.path, 'test-plan', 'plan.json');
+                if (!await fs.pathExists(planPath)) continue;
+                
+                const plan = await fs.readJson(planPath) as Plan;
+                if (!plan.testCases) continue;
+                
+                const index = plan.testCases.findIndex((tc) => tc._id === id);
+                
+                if (index !== -1) {
+                    // Found it! Update the test case
+                    plan.testCases[index] = { 
+                        ...plan.testCases[index], 
+                        ...data, 
+                        updatedAt: new Date().toISOString() 
+                    };
+                    await fs.writeJson(planPath, plan, { spaces: 2 });
+                    console.log('[handlers] testcase:update - Updated in project:', proj._id);
+                    return plan.testCases[index];
+                }
+            } catch {
+                continue;
+            }
+        }
+        
+        throw new Error('Test Case not found in any project');
     });
 
-    // Test Case Delete
+    // Test Case Delete (STATELESS - auto-discovers project)
     ipcMain.handle('testcase:delete', async (_, id) => {
-        const currentProject = getProject();
-        if (!currentProject) throw new Error("No project selected");
-        const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
-        const plan = await fs.readJson(planPath);
-
-        plan.testCases = plan.testCases.filter((tc: any) => tc._id !== id);
-        await fs.writeJson(planPath, plan, { spaces: 2 });
-        return { success: true };
+        console.log('[handlers] testcase:delete - Searching for test case:', id);
+        
+        // Search all known projects to find the one containing this test case
+        const projects = await getProjectsFromStore();
+        
+        for (const proj of projects) {
+            try {
+                const planPath = path.join(proj.path, 'test-plan', 'plan.json');
+                if (!await fs.pathExists(planPath)) continue;
+                
+                const plan = await fs.readJson(planPath) as Plan;
+                if (!plan.testCases) continue;
+                
+                const found = plan.testCases.some((tc) => tc._id === id);
+                
+                if (found) {
+                    // Found it! Delete the test case
+                    plan.testCases = plan.testCases.filter((tc) => tc._id !== id);
+                    await fs.writeJson(planPath, plan, { spaces: 2 });
+                    console.log('[handlers] testcase:delete - Deleted from project:', proj._id);
+                    return { success: true };
+                }
+            } catch {
+                continue;
+            }
+        }
+        
+        throw new Error('Test Case not found in any project');
     });
 
     // Image Upload
@@ -593,11 +740,11 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         // === Build execution request and trigger executor ===
         try {
             const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
-            const plan = await fs.readJson(planPath);
+            const plan = await fs.readJson(planPath) as Plan;
             
             // Determine which test cases to run based on scope
-            let testCasesToRun: any[] = [];
-            let featuresToRun: any[] = [];
+            let testCasesToRun: TestCase[] = [];
+            let featuresToRun: Feature[] = [];
             
             const scope = data.scope || 'project';
             const selectedFeatureIds = data.selectedFeatureIds || [];
@@ -610,22 +757,21 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                 featuresToRun = plan.features || [];
             } else if (scope === 'features' && selectedFeatureIds.length > 0) {
                 // Run test cases from selected features
-                featuresToRun = (plan.features || []).filter((f: any) => selectedFeatureIds.includes(f._id));
-                testCasesToRun = (plan.testCases || []).filter((tc: any) => selectedFeatureIds.includes(tc.featureId));
+                featuresToRun = (plan.features || []).filter((f) => selectedFeatureIds.includes(f._id));
+                testCasesToRun = (plan.testCases || []).filter((tc) => selectedFeatureIds.includes(tc.featureId));
             } else if (scope === 'testcases' && selectedTestCases.length > 0) {
                 // Run specific test cases
-                const selectedIds = selectedTestCases.map((s: any) => s.testCaseId);
-                testCasesToRun = (plan.testCases || []).filter((tc: any) => selectedIds.includes(tc._id));
-                const featureIds = [...new Set(testCasesToRun.map((tc: any) => tc.featureId))];
-                featuresToRun = (plan.features || []).filter((f: any) => featureIds.includes(f._id));
+                const selectedIds = selectedTestCases.map((s: { testCaseId: string }) => s.testCaseId);
+                testCasesToRun = (plan.testCases || []).filter((tc) => selectedIds.includes(tc._id));
+                const featureIds = [...new Set(testCasesToRun.map((tc) => tc.featureId))];
+                featuresToRun = (plan.features || []).filter((f) => featureIds.includes(f._id));
             }
             
             // Get launch configuration (use first selected for now)
-            let launchConfig = null;
+            let launchConfig: Record<string, unknown> | null | undefined = null;
             if (selectedLaunchConfigIds.length > 0 && plan.project?.launchConfigurations) {
-                launchConfig = plan.project.launchConfigurations.find(
-                    (lc: any) => lc._id === selectedLaunchConfigIds[0]
-                );
+                const configs = plan.project.launchConfigurations as Array<Record<string, unknown> & { _id?: string }>;
+                launchConfig = configs.find((lc) => lc._id === selectedLaunchConfigIds[0]);
             }
             
             // Build features map for the executor

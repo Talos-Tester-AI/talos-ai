@@ -15,6 +15,7 @@ import { LaunchConfigListPage } from './pages/LaunchConfigListPage';
 import { LaunchConfigFormPage } from './pages/LaunchConfigFormPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ProjectProvider } from './contexts/ProjectContext';
+import { FeatureRouteWrapper } from './components/FeatureRouteWrapper';
 
 const ProjectRouteWrapper = () => {
   const { id } = useParams<{ id: string }>();
@@ -44,7 +45,11 @@ function App() {
             <Route path="runs" element={<ProjectRunsPage />} />
           </Route>
 
-          <Route path="/features/:id" element={<FeatureDetailPage />} />
+          {/* Feature routes wrapped to auto-load parent project */}
+          <Route path="/features/:id" element={<FeatureRouteWrapper />}>
+            <Route index element={<FeatureDetailPage />} />
+          </Route>
+
           <Route path="/suite-runs" element={<SuiteRunsPage />} />
           <Route path="/suite-runs/:id" element={<SuiteRunDetailPage />} />
           <Route path="/feature-runs/:id" element={<FeatureRunDetailPage />} />

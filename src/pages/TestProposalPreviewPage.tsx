@@ -7,6 +7,8 @@ import { getProject } from '../api/client';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { AIConfigWarningModal, useAIConfigCheck } from '../components/AIConfigWarning';
+import { useAppDispatch } from '../store/hooks';
+import { fetchProject } from '../store/slices/projectSlice';
 
 interface TestStep {
   order: number;
@@ -55,6 +57,7 @@ interface ProgressStep {
 export const TestProposalPreviewPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const dispatch = useAppDispatch();
   const location = useLocation();
   const transientConfig = location.state?.configData;
   const [project, setProject] = useState<Project | null>(null);
@@ -232,6 +235,10 @@ export const TestProposalPreviewPage = () => {
         figmaAnalysis: analysisResult.figmaAnalysis
       });
 
+      // RELOAD PROJECT INTO REDUX WITH ALL NEW FEATURES
+      console.log('[TestProposalPreviewPage] Import done, reloading Redux...');
+      await dispatch(fetchProject(id!)).unwrap();
+      
       // Navigate back to project detail page
       navigate(`/projects/${id}`);
     } catch (err: any) {

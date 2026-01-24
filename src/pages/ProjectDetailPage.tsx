@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Plus, ArrowLeft, List, Sparkles, Play, FolderOpen, Box, Terminal, Pencil, Check, X, Trash2, History } from 'lucide-react';
 import { getFeaturesByProject, createFeature, deleteProject, browseDirectory } from '../api/client';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { updateProjectThunk, fetchProject } from '../store/slices/projectSlice';
+import { updateProjectThunk, fetchProject, createFeatureThunk } from '../store/slices/projectSlice';
 import type { Project, Feature } from '../types';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
@@ -142,10 +142,10 @@ export const ProjectDetailPage = () => {
     figmaAccessToken: ''
   });
 
-  // Fetch project on mount or when ID changes
+  // LOAD EVERYTHING INTO REDUX WHEN PROJECT OPENS
   useEffect(() => {
-    if (id) {
-      console.log('[ProjectDetailPage] Fetching project:', id);
+    if (id && id !== 'undefined' && id.trim() !== '') {
+      console.log('[ProjectDetailPage] LOADING PROJECT INTO REDUX WITH ALL DATA:', id);
       dispatch(fetchProject(id));
     }
   }, [id, dispatch]);
@@ -164,28 +164,25 @@ export const ProjectDetailPage = () => {
     }
   }, [project]);
 
-  // Load Features only
+  // GET FEATURES FROM REDUX - NOT FROM IPC!
+  const reduxFeatures = useAppSelector((state) => state.project.features);
+  
   useEffect(() => {
-    if (id) {
-      loadFeatures();
-    }
-  }, [id]);
-
-  const loadFeatures = async () => {
-    try {
-      const featuresRes = await getFeaturesByProject(id!);
-      setFeatures(featuresRes.data);
-    } catch (error) {
-      console.error('Failed to load features:', error);
-    } finally {
-      setFeaturesLoading(false);
-    }
-  };
+    console.log('[ProjectDetailPage] Syncing features from Redux:', reduxFeatures.length);
+    setFeatures(reduxFeatures);
+    setFeaturesLoading(false);
+  }, [reduxFeatures]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await createFeature(id!, formData);
+      console.log('[ProjectDetailPage] Creating feature via REDUX');
+      // CREATE VIA REDUX - updates Redux FIRST, then persists to disk
+      await dispatch(createFeatureThunk({ 
+        projectId: id!, 
+        data: formData 
+      })).unwrap();
+      
       setIsModalOpen(false);
       setFormData({
         projectId: id || '',
@@ -194,7 +191,7 @@ export const ProjectDetailPage = () => {
         globalSetup: { instruction: '', timeout: 30000 },
         globalTeardown: { instruction: '' }
       });
-      loadFeatures();
+      // No need to loadFeatures() - Redux already has it!
     } catch (error) {
       console.error('Failed to create feature:', error);
     }
