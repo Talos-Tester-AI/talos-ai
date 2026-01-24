@@ -1,18 +1,21 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, FolderOpen, FolderInput } from 'lucide-react';
-import { getProjects, createProject, selectProjectFolder, browseDirectory } from '../api/client';
-import type { Project } from '../types';
+import { selectProjectFolder, browseDirectory } from '../api/client';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
 import { Input } from '../components/Input';
 import { Textarea } from '../components/Textarea';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { fetchProjects, createProjectThunk } from '../store/slices/projectSlice';
 
 export const ProjectsPage = () => {
   const navigate = useNavigate();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
+  const dispatch = useAppDispatch();
+  
+  // Read from Redux state
+  const { projects, loading } = useAppSelector(state => state.project);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const [formData, setFormData] = useState({
@@ -23,19 +26,9 @@ export const ProjectsPage = () => {
   });
 
   useEffect(() => {
-    loadProjects();
-  }, []);
-
-  const loadProjects = async () => {
-    try {
-      const response = await getProjects();
-      setProjects(response.data);
-    } catch (error) {
-      console.error('Failed to load projects:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    // Load projects from persistent storage into Redux
+    dispatch(fetchProjects());
+  }, [dispatch]);
 
   const handleBrowse = async () => {
     try {
@@ -55,12 +48,16 @@ export const ProjectsPage = () => {
       return;
     }
     try {
-      await createProject(formData);
+      // Create project (saves to storage + loads into Redux)
+      const result = await dispatch(createProjectThunk(formData)).unwrap();
+      
+      // Close modal and navigate to project page
       setIsModalOpen(false);
       setFormData({ name: '', baseUrl: '', systemContext: '', folderPath: '' });
-      loadProjects();
+      navigate(`/projects/${result._id}`);
     } catch (error) {
       console.error('Failed to create project:', error);
+      alert('Failed to create project');
     }
   };
 

@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'fs-extra';
 import { randomUUID } from 'node:crypto';
 import { setProject, getProject } from './state';
+import { addProjectToStore, getProjectsFromStore, removeProjectFromStore, updateProjectInStore } from './projectStore';
 import Store from 'electron-store';
 
 // Executor configuration
@@ -139,6 +140,17 @@ export function setupHandlers(mainWindow: BrowserWindow) {
             await fs.writeJson(planPath, initialPlan, { spaces: 2 });
         }
 
+        // Add to persistent store
+        await addProjectToStore({
+            _id: projectId,
+            name: projectData.name,
+            path: projectPath,
+            baseUrl: projectData.baseUrl,
+            systemContext: projectData.systemContext,
+            createdAt: projectData.createdAt,
+            updatedAt: projectData.updatedAt
+        });
+
         // Ensure ID matches path (in case moved)
         return { ...projectData, _id: projectId };
     });
@@ -187,6 +199,18 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         };
 
         await fs.writeJson(planPath, initialPlan, { spaces: 2 });
+        
+        // Add to persistent store
+        await addProjectToStore({
+            _id: projectId,
+            name: projectData.name,
+            path: projectPath,
+            baseUrl: projectData.baseUrl,
+            systemContext: projectData.systemContext,
+            createdAt: projectData.createdAt,
+            updatedAt: projectData.updatedAt
+        });
+        
         return { ...projectData, _id: projectId };
     });
 
@@ -231,6 +255,10 @@ export function setupHandlers(mainWindow: BrowserWindow) {
 
             await fs.writeJson(planPath, plan, { spaces: 2 });
             console.log(`[handlers] project:update write successful to ${planPath}`);
+            
+            // Update persistent store
+            await updateProjectInStore(id, data);
+            
             return plan.project;
         } catch (error) {
             console.error(`[handlers] project:update failed:`, error);
@@ -251,12 +279,14 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         // But since we track by folder, 'delete' on FS is dangerous.
         // Let's assuming "Delete" means "Move to Trash".
 
+        // Remove from persistent store
+        await removeProjectFromStore(id);
+        
         if (currentProject && currentProject.id === id) {
             // const trash = await import('trash'); // if available
             // For now, let's just rename it to .deleted
             // Or better, just unset the project.
             setProject(null);
-            return { success: true };
         }
 
         // If we want to support actual deletion:
@@ -276,9 +306,9 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         return { ...plan.project, _id: id };
     });
 
-    // Recent Projects (Mock for now, normally stored in app.getPath('userData')/config.json)
+    // List all known projects from persistent storage
     ipcMain.handle('project:list', async () => {
-        return []; // Implement persistent store later
+        return await getProjectsFromStore();
     });
 
     // Features List
