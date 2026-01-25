@@ -363,6 +363,9 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         const planPath = path.join(projectPath, 'test-plan', 'plan.json');
         if (!await fs.pathExists(planPath)) throw new Error('Project not found');
         
+        // Set this project as active so subsequent operations work
+        setProject({ id, path: projectPath });
+        
         const plan = await fs.readJson(planPath) as Plan;
         
         const result = {

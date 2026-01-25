@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { buildTestProposalPrompt } from './prompts/prompt-loader';
 
 export type AIProvider = 'openai' | 'claude' | 'gemini';
 
@@ -57,76 +58,34 @@ export interface AnalysisResult {
     figmaAnalysis: FigmaAnalysis | null;
 }
 
-/**
- * Build the system prompt for test proposal generation
- */
-function buildSystemPrompt(baseUrl?: string, systemContext?: string, projectType?: string): string {
-    return `You are an expert QA engineer and test automation specialist. Your task is to analyze the provided source code and generate a comprehensive test proposal for end-to-end testing.
-
-${systemContext ? `Additional Context: ${systemContext}` : ''}
-${baseUrl ? `Application Base URL: ${baseUrl}` : ''}
-${projectType ? `Detected Project Type: ${projectType}` : ''}
-
-Generate a JSON test proposal with the following structure:
-
-{
-  "features": [
-    {
-      "name": "Feature Name",
-      "description": "Description of what this feature does",
-      "status": "NEW",
-      "globalSetup": {
-        "instruction": "Setup instruction (e.g., 'Navigate to the login page and login with test user')",
-        "timeout": 30000
-      },
-      "globalTeardown": {
-        "instruction": "Cleanup instruction (e.g., 'Logout and clear session')"
-      },
-      "testCases": [
-        {
-          "title": "Test Case Title",
-          "description": "What this test case verifies",
-          "status": "NEW",
-          "steps": [
-            {
-              "instruction": "User action to perform (e.g., 'Click the Submit button')",
-              "expectedResult": "Expected outcome (e.g., 'Form is submitted and success message appears')"
-            }
-          ],
-          "localSetup": {
-            "instruction": "Test-specific setup if needed"
-          },
-          "localTeardown": {
-            "instruction": "Test-specific cleanup if needed"
-          }
-        }
-      ]
-    }
-  ]
-}
-
-Guidelines for generating tests:
-1. Group related functionality into features (e.g., "User Authentication", "Dashboard", "Settings")
-2. Each feature should have 3-10 test cases covering happy paths and key edge cases
-3. Test steps should be clear, actionable instructions that a human or AI agent can follow
-4. Expected results should be specific and verifiable
-5. Include setup/teardown when tests need specific preconditions
-6. For web apps, consider navigation, forms, buttons, validation, and user flows
-7. For mobile apps, consider gestures, navigation, permissions, and device-specific behaviors
-8. Focus on user-facing functionality, not internal implementation
-9. Keep instructions concise but unambiguous
-
-IMPORTANT: Return ONLY valid JSON, no markdown formatting, no code blocks, just the raw JSON object.`;
-}
 
 /**
  * Build the user prompt with project context
  */
-function buildUserPrompt(projectContext: string, existingFeatures?: string[]): string {
-    let prompt = `Analyze the following source code and generate a comprehensive test proposal:\n\n${projectContext}`;
+function buildUserPrompt(
+    projectContext: string, 
+    baseUrl?: string, 
+    systemContext?: string, 
+    projectType?: string,
+    existingFeatures?: string[]
+): string {
+    let prompt = '';
+    
+    // Add context information
+    if (systemContext) {
+        prompt += `Additional Context: ${systemContext}\n\n`;
+    }
+    if (baseUrl) {
+        prompt += `Application Base URL: ${baseUrl}\n\n`;
+    }
+    if (projectType) {
+        prompt += `Detected Project Type: ${projectType}\n\n`;
+    }
+    
+    prompt += `Analyze the following source code and generate a comprehensive test proposal:\n\n${projectContext}`;
     
     if (existingFeatures && existingFeatures.length > 0) {
-        prompt += `\n\nNote: The following features already exist in the test plan. You can suggest modifications (status: "MODIFIED") or mark them as unchanged (status: "UNCHANGED") if the code doesn't affect them:\n${existingFeatures.join(', ')}`;
+        prompt += `\n\nEXISTING TEST SUITE:\nThe following features already exist in the test plan. You can suggest modifications (status: "MODIFIED") or mark them as unchanged (status: "UNCHANGED") if the code doesn't affect them:\n${existingFeatures.join(', ')}`;
     }
     
     return prompt;
@@ -270,8 +229,8 @@ export async function generateTestProposal(
     existingFeatures?: string[],
     onProgress?: (message: string) => void
 ): Promise<TestProposal> {
-    const systemPrompt = buildSystemPrompt(baseUrl, systemContext, projectType);
-    const userPrompt = buildUserPrompt(projectContext, existingFeatures);
+    const systemPrompt = buildTestProposalPrompt();
+    const userPrompt = buildUserPrompt(projectContext, baseUrl, systemContext, projectType, existingFeatures);
     
     onProgress?.(`Calling ${aiConfig.provider} API with model ${aiConfig.complexModel}...`);
     console.log(`[ai-analyzer] Calling ${aiConfig.provider} API with model ${aiConfig.complexModel}`);
