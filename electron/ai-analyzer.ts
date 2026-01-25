@@ -36,8 +36,22 @@ export interface Feature {
     testCases: TestCase[];
 }
 
+export interface LaunchConfiguration {
+    _id?: string;
+    name: string;
+    type: string;
+    request: string;
+    program?: string;
+    cwd?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    status?: 'NEW' | 'MODIFIED' | 'UNCHANGED' | 'REMOVED';
+    [key: string]: unknown;
+}
+
 export interface TestProposal {
     features: Feature[];
+    launchConfigurations?: LaunchConfiguration[];
 }
 
 export interface FigmaAnalysis {
@@ -116,7 +130,7 @@ function parseAIResponse(response: string): TestProposal {
         // Validate structure
         if (!parsed.features || !Array.isArray(parsed.features)) {
             console.error('[ai-analyzer] Invalid response structure, missing features array');
-            return { features: [] };
+            return { features: [], launchConfigurations: [] };
         }
         
         // Ensure all features have required fields
@@ -140,11 +154,27 @@ function parseAIResponse(response: string): TestProposal {
             })),
         }));
         
-        return { features };
+        // Extract launch configurations if present
+        const launchConfigurations: LaunchConfiguration[] = (parsed.launchConfigurations || []).map((lc: any) => ({
+            name: lc.name || 'Unnamed Launch Config',
+            type: lc.type || 'node',
+            request: lc.request || 'launch',
+            program: lc.program,
+            cwd: lc.cwd,
+            args: lc.args,
+            env: lc.env,
+            status: lc.status || 'NEW',
+            // Include any additional fields
+            ...lc
+        }));
+        
+        console.log(`[ai-analyzer] Parsed ${features.length} features and ${launchConfigurations.length} launch configurations`);
+        
+        return { features, launchConfigurations };
     } catch (e) {
         console.error('[ai-analyzer] Failed to parse AI response:', e);
         console.error('[ai-analyzer] Response was:', jsonStr.substring(0, 500));
-        return { features: [] };
+        return { features: [], launchConfigurations: [] };
     }
 }
 

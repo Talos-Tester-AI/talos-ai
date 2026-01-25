@@ -495,6 +495,23 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
             plan.features = [...(plan.features || []), ...newFeatures];
             plan.testCases = [...(plan.testCases || []), ...newTestCases];
 
+            // Handle launch configurations if present
+            if (proposal.launchConfigurations && Array.isArray(proposal.launchConfigurations)) {
+                console.log(`[server] Importing ${proposal.launchConfigurations.length} launch configurations`);
+                
+                // Add IDs to launch configs if not present
+                const launchConfigs = proposal.launchConfigurations.map((lc: any) => ({
+                    _id: lc._id || crypto.randomBytes(12).toString('hex'),
+                    ...lc
+                }));
+                
+                // Merge with existing configs (or replace them)
+                plan.project.launchConfigurations = [...(plan.project.launchConfigurations || []), ...launchConfigs];
+            }
+
+            // Update project timestamp
+            plan.project.updatedAt = new Date().toISOString();
+
             // Save updated plan
             await fs.writeJson(planPath, plan, { spaces: 2 });
 

@@ -3,20 +3,64 @@ You are an expert QA engineer creating a comprehensive test proposal for an appl
 I will provide you with:
 1. Concatenated source code files from the project
 2. (Optional) Figma design nodes structure if a Figma project was provided
+3. (Optional) EXISTING FEATURES with their test cases, steps, and launch configurations - when provided, you MUST perform differential analysis and mark status for every item at every level
 
 **Your objectives:**
 1. Understand the application's features and user workflows
 2. Identify testable scenarios
 3. Create a hierarchical test structure: Features → Test Cases → Test Steps
-4. Identify suitable Launch Configurations for running/debugging the application (e.g., "Debug Node Setup", "Run Flutter App")
+4. **CRITICAL: Identify at least ONE suitable Launch Configuration for running/debugging the application (e.g., "Debug Node Setup", "Run Flutter App"). This is MANDATORY - every test suite MUST have at least one launch config.**
 5. **CRITICAL: If Figma nodes are provided, assign the appropriate Figma node ID as expectedFigmaNodeId for EACH step where visual validation is needed**
 
 **Differential Analysis (CRITICAL):**
-If I provide an "EXISTING TEST SUITE" or "EXISTING LAUNCH CONFIGS", you must compare your new findings against them:
-1.  **UNCHANGED**: If an existing item (test or launch config) is still perfectly valid, mark status as "UNCHANGED".
-2.  **MODIFIED**: If an existing item is mostly correct but needs updates, mark status as "MODIFIED".
-3.  **NEW**: If you find new functionality or a new way to launch the app, mark status as "NEW".
-4.  **REMOVED**: If an existing item is no longer relevant, mark status as "REMOVED".
+When I provide "EXISTING FEATURES" or "EXISTING LAUNCH CONFIGS", you MUST perform a comprehensive comparison and mark status at EVERY level:
+
+**Status Marking Rules (applies to Features, Test Cases, Steps, and Launch Configs):**
+1. **NEW**: The item didn't exist before OR represents completely new functionality
+2. **MODIFIED**: The item existed but has changes (e.g., a feature with new test cases, a test case with new/modified steps, a step with changed instructions)
+3. **UNCHANGED**: The item exists and remains perfectly valid with no changes needed
+4. **REMOVED**: The item existed before but is no longer relevant based on current codebase
+
+**How to Perform Differential Analysis:**
+- **For Features**: 
+  - Mark as NEW if the feature is entirely new
+  - Mark as MODIFIED if the feature exists but has any new/modified/removed test cases
+  - Mark as UNCHANGED only if all its test cases are UNCHANGED
+  - Include REMOVED features in the output if they no longer apply
+
+- **For Test Cases**:
+  - Mark as NEW if this test case is entirely new
+  - Mark as MODIFIED if the test case exists but has any new/modified/removed steps, OR if platforms/setup/teardown changed
+  - Mark as UNCHANGED only if all its steps and properties are UNCHANGED
+  - Mark as REMOVED if the test case is no longer relevant
+
+- **For Steps**:
+  - Mark as NEW if this step is entirely new
+  - Mark as MODIFIED if the step existed but the instruction, expectedResult, expectedFigmaNodeId, or waitTimeMs changed
+  - Mark as UNCHANGED if the step is identical to the existing one
+  - Mark as REMOVED if the step is no longer needed
+
+- **For Launch Configs**:
+  - Mark as NEW if this launch configuration is entirely new
+  - Mark as MODIFIED if any property changed (program, args, env, etc.)
+  - Mark as UNCHANGED if identical to existing
+  - Mark as REMOVED if no longer applicable
+
+**IMPORTANT**: Always include ALL items (NEW, MODIFIED, UNCHANGED, and REMOVED) in your response to provide a complete picture of what changed.
+
+**Differential Analysis Example:**
+Existing: Feature "Login" with test case "Valid Login" (3 steps)
+New codebase: Login feature now has 2FA, and a new Registration feature exists
+
+Your response should:
+- Feature "Login": status = "MODIFIED" (because test cases changed)
+  - Test case "Valid Login": status = "MODIFIED" (because steps changed or added)
+    - Step 1 "Enter username": status = "UNCHANGED"
+    - Step 2 "Enter password": status = "UNCHANGED"  
+    - Step 3 "Click login": status = "MODIFIED" (now includes 2FA)
+    - Step 4 "Enter 2FA code": status = "NEW"
+  - Test case "Login with 2FA": status = "NEW"
+- Feature "Registration": status = "NEW" (entirely new feature)
 
 **Return format:**
 Return ONLY a valid JSON object with this exact structure:
@@ -47,7 +91,8 @@ Return ONLY a valid JSON object with this exact structure:
               "instruction": "Step instruction for AI executor",
               "expectedResult": "What should happen (optional)",
               "expectedFigmaNodeId": "figma-node-id (CRITICAL: include this when a Figma node shows what the screen should look like after this step)",
-              "waitTimeMs": 0
+              "waitTimeMs": 0,
+              "status": "NEW" | "MODIFIED" | "UNCHANGED" | "REMOVED"
             }
           ],
           "localTeardown": {
@@ -86,7 +131,7 @@ Example:
 **Guidelines:**
 - Create as many features as necessary to cover the codebase fully. Do not limit yourself to a fixed number.
 - Each feature should have test cases covering key scenarios.
-- Identify at least 1 valid Launch Configuration based on the project type (e.g., package.json scripts, main.dart, manage.py, Dockerfile).
+- **MANDATORY: You MUST create at least 1 valid Launch Configuration based on the project type (e.g., package.json scripts, main.dart, manage.py, Dockerfile). The launchConfigurations array cannot be empty.**
 - Instructions should be clear and actionable for an AI agent.
 - Use imperative language: "Navigate to...", "Click on...", "Verify that...".
 - **Assign expectedFigmaNodeId to as many steps as possible where a Figma design shows the expected state.**
@@ -111,6 +156,15 @@ Example:
 - Ensure all JSON is properly formatted and escaped
 - Focus on user-facing functionality
 - Prioritize critical user workflows
-- RESPECT the "EXISTING TEST SUITE" if provided. Do not duplicate existing tests as "NEW" if they are merely "UNCHANGED".
+- **When EXISTING FEATURES are provided:**
+  - INCLUDE ALL existing features in your response (with their correct status: UNCHANGED, MODIFIED, or REMOVED)
+  - INCLUDE ALL existing test cases (marking them as NEW, MODIFIED, UNCHANGED, or REMOVED)
+  - INCLUDE ALL existing steps (marking them as NEW, MODIFIED, UNCHANGED, or REMOVED)
+  - ADD any NEW features, test cases, or steps you discover from the codebase
+  - DO NOT duplicate existing items as "NEW" if they are merely "UNCHANGED"
+  - A feature is MODIFIED if it has any changes in its test cases or steps, even if the feature name/description is the same
+  - A test case is MODIFIED if it has any changes in its steps or properties
 - **EVERY step that has a corresponding Figma design MUST have expectedFigmaNodeId set**
+- **The launchConfigurations array MUST contain at least ONE valid launch configuration. This is non-negotiable.**
+- **Status marking is MANDATORY at ALL levels: features, test cases, steps, and launch configs**
 
