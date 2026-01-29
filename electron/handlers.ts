@@ -1,8 +1,9 @@
-import { ipcMain, dialog, BrowserWindow, app } from 'electron';
+import electron from 'electron';
+const { ipcMain, dialog, BrowserWindow, app } = electron;
 import path from 'node:path';
 import fs from 'fs-extra';
 import { randomUUID } from 'node:crypto';
-import { setProject, getProject } from './state';
+import { setProject, getProject, getServerPort } from './state';
 import { addProjectToStore, getProjectsFromStore, removeProjectFromStore, updateProjectInStore } from './projectStore';
 import Store from 'electron-store';
 
@@ -52,13 +53,13 @@ async function sendConfigToExecutor(apiKey: string): Promise<boolean> {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ geminiApiKey: apiKey })
         });
-        
+
         if (!response.ok) {
             const error = await response.text();
             console.error('[handlers] Failed to configure executor:', error);
             return false;
         }
-        
+
         console.log('[handlers] Executor configured with API key');
         return true;
     } catch (error) {
@@ -77,13 +78,13 @@ async function triggerExecution(executionRequest: any): Promise<{ success: boole
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(executionRequest)
         });
-        
+
         if (!response.ok) {
             const error = await response.text();
             console.error('[handlers] Executor returned error:', error);
             return { success: false, error };
         }
-        
+
         const result = await response.json();
         console.log('[handlers] Execution started:', result);
         return { success: true };
@@ -117,7 +118,7 @@ const getIdFromPath = (p: string) => Buffer.from(p).toString('hex');
 const encodeId = (p: string) => Buffer.from(p).toString('hex');
 // const decodeId = (id: string) => Buffer.from(id, 'hex').toString('utf-8');
 
-export function setupHandlers(mainWindow: BrowserWindow) {
+export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
     // Browse Directory
     ipcMain.handle('dialog:browse', async () => {
         try {
@@ -151,54 +152,54 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                 return null;
             }
 
-        const projectPath = result.filePaths[0];
-        const projectId = encodeId(projectPath);
+            const projectPath = result.filePaths[0];
+            const projectId = encodeId(projectPath);
 
-        setProject({ id: projectId, path: projectPath }); // Update state
+            setProject({ id: projectId, path: projectPath }); // Update state
 
-        const planPath = path.join(projectPath, 'test-plan', 'plan.json');
+            const planPath = path.join(projectPath, 'test-plan', 'plan.json');
 
-        // Ensure structure exists
-        await fs.ensureDir(path.join(projectPath, 'test-plan'));
-        await fs.ensureDir(path.join(projectPath, 'test-run'));
+            // Ensure structure exists
+            await fs.ensureDir(path.join(projectPath, 'test-plan'));
+            await fs.ensureDir(path.join(projectPath, 'test-run'));
 
-        let projectData;
-        if (await fs.pathExists(planPath)) {
-            const plan = await fs.readJson(planPath);
-            projectData = plan.project;
-        } else {
-            // Create new project structure
-            projectData = {
+            let projectData;
+            if (await fs.pathExists(planPath)) {
+                const plan = await fs.readJson(planPath);
+                projectData = plan.project;
+            } else {
+                // Create new project structure
+                projectData = {
+                    _id: projectId,
+                    name: path.basename(projectPath),
+                    baseUrl: '',
+                    systemContext: 'New Talos Project',
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+
+                const initialPlan = {
+                    project: projectData,
+                    features: [],
+                    testCases: []
+                };
+
+                await fs.writeJson(planPath, initialPlan, { spaces: 2 });
+            }
+
+            // Add to persistent store
+            await addProjectToStore({
                 _id: projectId,
-                name: path.basename(projectPath),
-                baseUrl: '',
-                systemContext: 'New Talos Project',
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            };
+                name: projectData.name,
+                path: projectPath,
+                baseUrl: projectData.baseUrl,
+                systemContext: projectData.systemContext,
+                createdAt: projectData.createdAt,
+                updatedAt: projectData.updatedAt
+            });
 
-            const initialPlan = {
-                project: projectData,
-                features: [],
-                testCases: []
-            };
-
-            await fs.writeJson(planPath, initialPlan, { spaces: 2 });
-        }
-
-        // Add to persistent store
-        await addProjectToStore({
-            _id: projectId,
-            name: projectData.name,
-            path: projectPath,
-            baseUrl: projectData.baseUrl,
-            systemContext: projectData.systemContext,
-            createdAt: projectData.createdAt,
-            updatedAt: projectData.updatedAt
-        });
-
-        // Ensure ID matches path (in case moved)
-        return { ...projectData, _id: projectId };
+            // Ensure ID matches path (in case moved)
+            return { ...projectData, _id: projectId };
         } catch (error) {
             console.error('[handlers] Error in project:select:', error);
             throw error;
@@ -249,7 +250,7 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         };
 
         await fs.writeJson(planPath, initialPlan, { spaces: 2 });
-        
+
         // Add to persistent store
         await addProjectToStore({
             _id: projectId,
@@ -260,7 +261,7 @@ export function setupHandlers(mainWindow: BrowserWindow) {
             createdAt: projectData.createdAt,
             updatedAt: projectData.updatedAt
         });
-        
+
         return { ...projectData, _id: projectId };
     });
 
@@ -305,10 +306,10 @@ export function setupHandlers(mainWindow: BrowserWindow) {
 
             await fs.writeJson(planPath, plan, { spaces: 2 });
             console.log(`[handlers] project:update write successful to ${planPath}`);
-            
+
             // Update persistent store
             await updateProjectInStore(id, data);
-            
+
             return plan.project;
         } catch (error) {
             console.error(`[handlers] project:update failed:`, error);
@@ -331,7 +332,7 @@ export function setupHandlers(mainWindow: BrowserWindow) {
 
         // Remove from persistent store
         await removeProjectFromStore(id);
-        
+
         if (currentProject && currentProject.id === id) {
             // const trash = await import('trash'); // if available
             // For now, let's just rename it to .deleted
@@ -362,18 +363,18 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         const projectPath = getPathFromId(id);
         const planPath = path.join(projectPath, 'test-plan', 'plan.json');
         if (!await fs.pathExists(planPath)) throw new Error('Project not found');
-        
+
         // Set this project as active so subsequent operations work
         setProject({ id, path: projectPath });
-        
+
         const plan = await fs.readJson(planPath) as Plan;
-        
+
         const result = {
             project: { ...plan.project, _id: id },
             features: plan.features || [],
             testCases: plan.testCases || []
         };
-        
+
         console.log('[handlers] project:getFull - Returning', result.features.length, 'features and', result.testCases.length, 'test cases');
         return result;
     });
@@ -425,17 +426,17 @@ export function setupHandlers(mainWindow: BrowserWindow) {
     ipcMain.handle('feature:get', async (_, id) => {
         console.log('[handlers] feature:get called for ID:', id);
         let currentProject = getProject();
-        
+
         // If no project is selected, try to find the project containing this feature
         if (!currentProject) {
             console.log('[handlers] No current project, searching all known projects...');
             const projects = await getProjectsFromStore();
             console.log('[handlers] Found', projects.length, 'projects in store');
-            
+
             for (const proj of projects) {
                 const planPath = path.join(proj.path, 'test-plan', 'plan.json');
                 console.log('[handlers] Checking project:', proj.name, 'at', planPath);
-                
+
                 if (await fs.pathExists(planPath)) {
                     const plan = await fs.readJson(planPath) as Plan;
                     console.log('[handlers] Project has', (plan.features || []).length, 'features');
@@ -451,7 +452,7 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                     console.log('[handlers] Plan file does not exist at', planPath);
                 }
             }
-            
+
             if (!currentProject) {
                 console.error('[handlers] Feature not found in any project. Projects checked:', projects.length);
                 throw new Error("No project selected and feature not found in any known project");
@@ -525,11 +526,11 @@ export function setupHandlers(mainWindow: BrowserWindow) {
     // Test Cases List - STATELESS, searches all projects
     ipcMain.handle('testcase:list', async (_, featureId) => {
         console.log('[handlers] testcase:list called for feature:', featureId);
-        
+
         // Search ALL projects to find the one containing this feature
         const projects = await getProjectsFromStore();
         console.log('[handlers] Searching', projects.length, 'projects for feature', featureId);
-        
+
         for (const proj of projects) {
             const planPath = path.join(proj.path, 'test-plan', 'plan.json');
             if (await fs.pathExists(planPath)) {
@@ -541,7 +542,7 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                 }
             }
         }
-        
+
         console.error('[handlers] Feature not found in any project:', featureId);
         return [];
     });
@@ -607,26 +608,26 @@ export function setupHandlers(mainWindow: BrowserWindow) {
     // Test Case Update (STATELESS - auto-discovers project)
     ipcMain.handle('testcase:update', async (_, id, data) => {
         console.log('[handlers] testcase:update - Searching for test case:', id);
-        
+
         // Search all known projects to find the one containing this test case
         const projects = await getProjectsFromStore();
-        
+
         for (const proj of projects) {
             try {
                 const planPath = path.join(proj.path, 'test-plan', 'plan.json');
                 if (!await fs.pathExists(planPath)) continue;
-                
+
                 const plan = await fs.readJson(planPath) as Plan;
                 if (!plan.testCases) continue;
-                
+
                 const index = plan.testCases.findIndex((tc) => tc._id === id);
-                
+
                 if (index !== -1) {
                     // Found it! Update the test case
-                    plan.testCases[index] = { 
-                        ...plan.testCases[index], 
-                        ...data, 
-                        updatedAt: new Date().toISOString() 
+                    plan.testCases[index] = {
+                        ...plan.testCases[index],
+                        ...data,
+                        updatedAt: new Date().toISOString()
                     };
                     await fs.writeJson(planPath, plan, { spaces: 2 });
                     console.log('[handlers] testcase:update - Updated in project:', proj._id);
@@ -636,27 +637,27 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                 continue;
             }
         }
-        
+
         throw new Error('Test Case not found in any project');
     });
 
     // Test Case Delete (STATELESS - auto-discovers project)
     ipcMain.handle('testcase:delete', async (_, id) => {
         console.log('[handlers] testcase:delete - Searching for test case:', id);
-        
+
         // Search all known projects to find the one containing this test case
         const projects = await getProjectsFromStore();
-        
+
         for (const proj of projects) {
             try {
                 const planPath = path.join(proj.path, 'test-plan', 'plan.json');
                 if (!await fs.pathExists(planPath)) continue;
-                
+
                 const plan = await fs.readJson(planPath) as Plan;
                 if (!plan.testCases) continue;
-                
+
                 const found = plan.testCases.some((tc) => tc._id === id);
-                
+
                 if (found) {
                     // Found it! Delete the test case
                     plan.testCases = plan.testCases.filter((tc) => tc._id !== id);
@@ -668,7 +669,7 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                 continue;
             }
         }
-        
+
         throw new Error('Test Case not found in any project');
     });
 
@@ -744,16 +745,16 @@ export function setupHandlers(mainWindow: BrowserWindow) {
         try {
             const planPath = path.join(currentProject.path, 'test-plan', 'plan.json');
             const plan = await fs.readJson(planPath) as Plan;
-            
+
             // Determine which test cases to run based on scope
             let testCasesToRun: TestCase[] = [];
             let featuresToRun: Feature[] = [];
-            
+
             const scope = data.scope || 'project';
             const selectedFeatureIds = data.selectedFeatureIds || [];
             const selectedTestCases = data.selectedTestCases || [];
             const selectedLaunchConfigIds = data.selectedLaunchConfigIds || [];
-            
+
             if (scope === 'project') {
                 // Run all test cases
                 testCasesToRun = plan.testCases || [];
@@ -769,14 +770,14 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                 const featureIds = [...new Set(testCasesToRun.map((tc) => tc.featureId))];
                 featuresToRun = (plan.features || []).filter((f) => featureIds.includes(f._id));
             }
-            
+
             // Get launch configuration (use first selected for now)
             let launchConfig: Record<string, unknown> | null | undefined = null;
             if (selectedLaunchConfigIds.length > 0 && plan.project?.launchConfigurations) {
                 const configs = plan.project.launchConfigurations as Array<Record<string, unknown> & { _id?: string }>;
                 launchConfig = configs.find((lc) => lc._id === selectedLaunchConfigIds[0]);
             }
-            
+
             // Build features map for the executor
             const featuresMap: Record<string, any> = {};
             for (const feature of featuresToRun) {
@@ -786,12 +787,16 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                     globalTeardown: feature.globalTeardown || null
                 };
             }
-            
+
             // Build test cases in executor format
+            const serverPort = getServerPort();
+            const serverUrl = serverPort ? `http://localhost:${serverPort}` : undefined;
+
             const testCasesForExecutor = testCasesToRun.map((tc: any) => {
                 const feature = featuresToRun.find((f: any) => f._id === tc.featureId);
                 return {
                     testRunId: runId,
+                    serverUrl: serverUrl,  // Pass the CLI server URL to the agent
                     featureId: tc.featureId,
                     featureName: feature?.name || 'Unknown Feature',
                     testCaseId: tc._id,
@@ -806,7 +811,7 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                     localTeardown: tc.localTeardown || null
                 };
             });
-            
+
             // Build execution request
             const executionRequest = {
                 testRunId: runId,
@@ -819,13 +824,13 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                 features: featuresMap,
                 testCases: testCasesForExecutor
             };
-            
+
             console.log(`[handlers] Triggering execution for ${testCasesForExecutor.length} test cases`);
-            
+
             // Update status to running before triggering
             runData.status = 'running';
             await fs.writeJson(path.join(runPath, 'run.json'), runData, { spaces: 2 });
-            
+
             // Trigger execution (don't await - it runs in background on executor)
             triggerExecution(executionRequest).then(result => {
                 if (!result.success) {
@@ -838,7 +843,7 @@ export function setupHandlers(mainWindow: BrowserWindow) {
                     });
                 }
             });
-            
+
         } catch (execError: any) {
             console.error('[handlers] Error preparing execution:', execError);
             // Update run status but don't fail the create operation
@@ -933,24 +938,24 @@ export function setupHandlers(mainWindow: BrowserWindow) {
     ipcMain.handle('launchConfig:create', async (_, projectId, config) => {
         try {
             console.log('[handlers] launchConfig:create - Persisting new config to disk');
-            
+
             const projectPath = getPathFromId(projectId);
             const planPath = path.join(projectPath, 'test-plan', 'plan.json');
-            
+
             if (!await fs.pathExists(planPath)) {
                 throw new Error('Project plan file not found');
             }
-            
+
             const plan = await fs.readJson(planPath) as Plan;
-            
+
             // Add the new config to launchConfigurations array
             const configs = plan.project.launchConfigurations || [];
             plan.project.launchConfigurations = [...configs, config];
             plan.project.updatedAt = new Date().toISOString();
-            
+
             await fs.writeJson(planPath, plan, { spaces: 2 });
             console.log('[handlers] launchConfig:create - Persisted config:', config._id);
-            
+
             return config;
         } catch (error) {
             console.error('[handlers] launchConfig:create failed:', error);
@@ -962,31 +967,31 @@ export function setupHandlers(mainWindow: BrowserWindow) {
     ipcMain.handle('launchConfig:update', async (_, projectId, configId, data) => {
         try {
             console.log('[handlers] launchConfig:update - Persisting config update to disk:', configId);
-            
+
             const projectPath = getPathFromId(projectId);
             const planPath = path.join(projectPath, 'test-plan', 'plan.json');
-            
+
             if (!await fs.pathExists(planPath)) {
                 throw new Error('Project plan file not found');
             }
-            
+
             const plan = await fs.readJson(planPath) as Plan;
-            
+
             // Find and update the config
-            const configs = (plan.project.launchConfigurations || []) as Array<{ _id?: string; [key: string]: unknown }>;
+            const configs = (plan.project.launchConfigurations || []) as Array<{ _id?: string;[key: string]: unknown }>;
             const index = configs.findIndex(c => c._id === configId);
-            
+
             if (index === -1) {
                 throw new Error('Launch config not found');
             }
-            
+
             configs[index] = { ...configs[index], ...data, _id: configId };
             plan.project.launchConfigurations = configs;
             plan.project.updatedAt = new Date().toISOString();
-            
+
             await fs.writeJson(planPath, plan, { spaces: 2 });
             console.log('[handlers] launchConfig:update - Persisted update for config:', configId);
-            
+
             return configs[index];
         } catch (error) {
             console.error('[handlers] launchConfig:update failed:', error);
@@ -998,24 +1003,24 @@ export function setupHandlers(mainWindow: BrowserWindow) {
     ipcMain.handle('launchConfig:delete', async (_, projectId, configId) => {
         try {
             console.log('[handlers] launchConfig:delete - Removing config from disk:', configId);
-            
+
             const projectPath = getPathFromId(projectId);
             const planPath = path.join(projectPath, 'test-plan', 'plan.json');
-            
+
             if (!await fs.pathExists(planPath)) {
                 throw new Error('Project plan file not found');
             }
-            
+
             const plan = await fs.readJson(planPath) as Plan;
-            
+
             // Remove the config
-            const configs = (plan.project.launchConfigurations || []) as Array<{ _id?: string; [key: string]: unknown }>;
+            const configs = (plan.project.launchConfigurations || []) as Array<{ _id?: string;[key: string]: unknown }>;
             plan.project.launchConfigurations = configs.filter(c => c._id !== configId);
             plan.project.updatedAt = new Date().toISOString();
-            
+
             await fs.writeJson(planPath, plan, { spaces: 2 });
             console.log('[handlers] launchConfig:delete - Removed config:', configId);
-            
+
             return { success: true };
         } catch (error) {
             console.error('[handlers] launchConfig:delete failed:', error);

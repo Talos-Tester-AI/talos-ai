@@ -1,8 +1,10 @@
-import { app, BrowserWindow } from 'electron'
+import electron from 'electron'
+const { app, BrowserWindow } = electron
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setupHandlers } from './handlers'
 import { startAgentServer } from './server'
+import { setServerPort } from './state'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -10,10 +12,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 if (process.platform === 'linux') {
     // Disable GPU acceleration which causes blank screen on some Linux systems
     app.disableHardwareAcceleration()
-    
+
     // Disable features that cause D-Bus/systemd errors
     app.commandLine.appendSwitch('disable-features', 'MediaSessionService')
-    
+
     // Use software rendering instead of GPU
     app.commandLine.appendSwitch('disable-gpu')
     app.commandLine.appendSwitch('disable-gpu-compositing')
@@ -21,7 +23,7 @@ if (process.platform === 'linux') {
     app.commandLine.appendSwitch('--no-sandbox')
     app.commandLine.appendSwitch('--disable-gpu-sandbox')
     app.commandLine.appendSwitch('--disable-dev-shm-usage')
-    
+
     // Ignore GPU blocklist
     app.commandLine.appendSwitch('ignore-gpu-blocklist')
 }
@@ -46,7 +48,7 @@ if (!gotTheLock) {
 process.env.DIST = path.join(__dirname, '../dist')
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(process.env.DIST, '../public')
 
-let win: BrowserWindow | null
+let win: InstanceType<typeof BrowserWindow> | null
 // 🚧 Use ['ENV_NAME'] avoid vite:define plugin - Vite@2.x
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
@@ -72,7 +74,9 @@ function createWindow() {
     })
 
     setupHandlers(win)
-    startAgentServer(3000, win)
+    const port = 3001;
+    startAgentServer(port, win)
+    setServerPort(port);
 
     // Test active push message to Electron-Renderer.
     win.webContents.on('did-finish-load', () => {
