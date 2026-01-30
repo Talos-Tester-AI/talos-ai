@@ -3,13 +3,35 @@ export interface CurrentProject {
     path: string;
 }
 
-let currentProject: CurrentProject | null = null;
+import Store from 'electron-store';
+
+interface StateStore {
+    currentProject: CurrentProject | null;
+}
+
+const store = new Store<StateStore>({
+    name: 'talos-state',
+    defaults: {
+        currentProject: null
+    }
+});
+
+let currentProject: CurrentProject | null = store.get('currentProject');
 
 export const setProject = (project: CurrentProject | null) => {
     currentProject = project;
+    store.set('currentProject', project);
+    if (project) {
+        console.log(`[state] Project persisted: ${project.path}`);
+    } else {
+        console.log('[state] Project cleared');
+    }
 };
 
 export const getProject = () => {
+    if (!currentProject) {
+        currentProject = store.get('currentProject');
+    }
     return currentProject;
 };
 
