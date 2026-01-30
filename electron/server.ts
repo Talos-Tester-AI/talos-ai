@@ -187,34 +187,30 @@ export function startAgentServer(port: number = 3000, mainWindow: InstanceType<t
                 await fs.writeFile(path.join(screensDir, filename), buffer);
 
                 // Clear base64 from json to save space, store reference
-                // Note: Frontend currently might expect base64 in SSE? 
-                // For file storage, we want separate file.
-                // Let's keep base64 in memory/SSE but remove from persistent file if needed.
-                // Or just keep it. Talos-server keeps it in DB usually (or S3).
-                // For local file, maybe keeping it in JSON makes single file huge.
-                // Let's strip it from persisted JSON but keeping the file reference.
                 result.screenshotPath = `screenshots/${filename}`;
-                delete result.screenshotBase64;
+                // delete result.screenshotBase64; // DON'T delete from result, we need it for live update!
             }
 
             // 2. Update run.json
             const runJsonPath = path.join(runDir, 'run.json');
             const runData = await fs.readJson(runJsonPath);
 
+            // Create persistence copy without base64
+            const persistenceResult = { ...result };
+            if (persistenceResult.screenshotBase64) {
+                delete persistenceResult.screenshotBase64;
+            }
+
             // Look for existing step result to update or append
-            // Step results in runData? 
-            // Talos-server typically stores steps in separate collection or array in TestRun.
-            // Let's assume runData has a 'results' array or similar.
-            // If not, let's add it.
             if (!runData.stepResults) runData.stepResults = [];
 
-            runData.stepResults.push(result);
+            runData.stepResults.push(persistenceResult);
             // Sort by start time? Or index. 
             runData.updatedAt = new Date().toISOString();
 
             await fs.writeJson(runJsonPath, runData, { spaces: 2 });
 
-            // Notify Frontend via IPC and SSE
+            // Notify Frontend via IPC and SSE (send full result with base64)
             mainWindow.webContents.send('agent:step-result', result);
             broadcast(testRunId, 'step_result', result);
 
