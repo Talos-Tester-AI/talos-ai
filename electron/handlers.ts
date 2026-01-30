@@ -831,7 +831,37 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
 
             console.log(`[handlers] Triggering execution for ${testCasesForExecutor.length} test cases`);
 
+            // Construct Test Structure for UI to display pending steps immediately
+            const testStructure = featuresToRun.map(feature => {
+                const featureTestCases = testCasesToRun
+                    .filter(tc => tc.featureId === feature._id)
+                    .map(tc => ({
+                        testCaseId: tc._id,
+                        testCaseTitle: (tc as any).title || 'Untitled Test Case',
+                        steps: ((tc as any).steps || []).map((step: any, idx: number) => ({
+                            order: step.order ?? idx,
+                            instruction: step.instruction,
+                            expectedResult: step.expectedResult
+                        }))
+                    }));
+
+                return {
+                    featureId: feature._id,
+                    featureName: feature.name,
+                    globalSetup: (feature as any).globalSetup ? {
+                        instruction: (feature as any).globalSetup.instruction,
+                        waitTimeMs: (feature as any).globalSetup.waitTimeMs
+                    } : undefined,
+                    globalTeardown: (feature as any).globalTeardown ? {
+                        instruction: (feature as any).globalTeardown.instruction,
+                        waitTimeMs: (feature as any).globalTeardown.waitTimeMs
+                    } : undefined,
+                    testCases: featureTestCases
+                };
+            });
+
             // Update status to running before triggering
+            (runData as any).testStructure = testStructure;
             runData.status = 'running';
             await fs.writeJson(path.join(runPath, 'run.json'), runData, { spaces: 2 });
 
