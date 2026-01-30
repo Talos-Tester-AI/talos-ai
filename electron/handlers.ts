@@ -796,8 +796,8 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
             for (const feature of featuresToRun) {
                 featuresMap[feature._id] = {
                     name: feature.name,
-                    globalSetup: feature.globalSetup || null,
-                    globalTeardown: feature.globalTeardown || null
+                    globalSetup: ((feature as any).globalSetup && (feature as any).globalSetup.instruction) ? (feature as any).globalSetup : null,
+                    globalTeardown: ((feature as any).globalTeardown && (feature as any).globalTeardown.instruction) ? (feature as any).globalTeardown : null
                 };
             }
 
@@ -861,11 +861,11 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
                 return {
                     featureId: feature._id,
                     featureName: feature.name,
-                    globalSetup: (feature as any).globalSetup ? {
+                    globalSetup: ((feature as any).globalSetup && (feature as any).globalSetup.instruction) ? {
                         instruction: (feature as any).globalSetup.instruction,
                         waitTimeMs: (feature as any).globalSetup.waitTimeMs
                     } : undefined,
-                    globalTeardown: (feature as any).globalTeardown ? {
+                    globalTeardown: ((feature as any).globalTeardown && (feature as any).globalTeardown.instruction) ? {
                         instruction: (feature as any).globalTeardown.instruction,
                         waitTimeMs: (feature as any).globalTeardown.waitTimeMs
                     } : undefined,
