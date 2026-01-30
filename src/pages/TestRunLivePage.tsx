@@ -17,6 +17,7 @@ interface StepResultData {
   status: 'passed' | 'failed';
   expectedResult?: string;
   aiReasoning?: string;
+  executionError?: string; // Added field
   screenshotBase64?: string;
   deviceLogs?: string[];
   startTime: string;
@@ -128,12 +129,14 @@ const TestCaseItem = memo(({
   testCase,
   onShowLogs,
   onShowReasoning,
-  onShowScreenshot
+  onShowScreenshot,
+  onShowError
 }: {
   testCase: TestCaseProgress;
   onShowLogs: (logs: string[]) => void;
   onShowReasoning: (reasoning: string) => void;
   onShowScreenshot: (base64: string) => void;
+  onShowError: (error: string) => void;
 }) => {
   return (
     <div className="border rounded-lg p-3">
@@ -171,6 +174,15 @@ const TestCaseItem = memo(({
                   title="View Device Logs"
                 >
                   <FileText size={16} />
+                </button>
+              )}
+              {step.executionError && (
+                <button
+                  className="p-1 hover:bg-white rounded text-red-600 hover:text-red-800 transition-colors"
+                  onClick={() => onShowError(step.executionError!)}
+                  title="View Execution Error"
+                >
+                  <XCircle size={16} />
                 </button>
               )}
               {step.aiReasoning && (
@@ -228,12 +240,14 @@ const FeatureItem = memo(({
   feature,
   onShowLogs,
   onShowReasoning,
-  onShowScreenshot
+  onShowScreenshot,
+  onShowError
 }: {
   feature: FeatureProgress;
   onShowLogs: (logs: string[]) => void;
   onShowReasoning: (reasoning: string) => void;
   onShowScreenshot: (base64: string) => void;
+  onShowError: (error: string) => void;
 }) => {
   return (
     <Card>
@@ -283,6 +297,7 @@ const FeatureItem = memo(({
             onShowLogs={onShowLogs}
             onShowReasoning={onShowReasoning}
             onShowScreenshot={onShowScreenshot}
+            onShowError={onShowError}
           />
         ))}
 
@@ -339,6 +354,7 @@ export const TestRunLivePage = () => {
   // Screenshot modal
   const [selectedScreenshot, setSelectedScreenshot] = useState<string | null>(null);
   const [selectedReasoning, setSelectedReasoning] = useState<string | null>(null);
+  const [selectedError, setSelectedError] = useState<string | null>(null);
   const [selectedLogs, setSelectedLogs] = useState<string[] | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -759,6 +775,10 @@ export const TestRunLivePage = () => {
     setSelectedScreenshot(screenshot);
   }, []);
 
+  const handleShowError = useCallback((error: string) => {
+    setSelectedError(error);
+  }, []);
+
   if (loading) {
     return <div className="text-center py-12">Loading test run...</div>;
   }
@@ -908,6 +928,7 @@ export const TestRunLivePage = () => {
             onShowLogs={handleShowLogs}
             onShowReasoning={handleShowReasoning}
             onShowScreenshot={handleShowScreenshot}
+            onShowError={handleShowError}
           />
         ))}
       </div>
@@ -966,6 +987,17 @@ export const TestRunLivePage = () => {
           ) : (
             <span className="text-gray-500 italic">No logs captured for this step.</span>
           )}
+        </div>
+      </Modal>
+
+      {/* Execution Error Modal */}
+      <Modal
+        isOpen={!!selectedError}
+        onClose={() => setSelectedError(null)}
+        title="Execution Error"
+      >
+        <div className="bg-red-50 text-red-900 font-mono text-xs p-4 rounded-lg h-96 overflow-y-auto">
+          <p className="whitespace-pre-wrap">{selectedError}</p>
         </div>
       </Modal>
     </div >
