@@ -771,6 +771,19 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
                 featuresToRun = (plan.features || []).filter((f) => featureIds.includes(f._id));
             }
 
+            // PRIORITIZE: Sort test cases to ensure they execute grouped by feature
+            // This prevents "jumping" between features and ensures global setup/teardown runs correctly once per feature
+            const featureOrderMap = new Map<string, number>();
+            featuresToRun.forEach((f, index) => {
+                featureOrderMap.set(f._id, index);
+            });
+
+            testCasesToRun.sort((a, b) => {
+                const orderA = featureOrderMap.get(a.featureId) ?? 9999;
+                const orderB = featureOrderMap.get(b.featureId) ?? 9999;
+                return orderA - orderB;
+            });
+
             // Get launch configuration (use first selected for now)
             let launchConfig: Record<string, unknown> | null | undefined = null;
             if (selectedLaunchConfigIds.length > 0 && plan.project?.launchConfigurations) {
