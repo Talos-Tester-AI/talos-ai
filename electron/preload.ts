@@ -1,4 +1,5 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import electron from 'electron'
+const { contextBridge, ipcRenderer } = electron
 
 // --------- Expose some API to the Renderer process ---------
 // Try contextBridge first, fallback to window if contextIsolation is disabled
@@ -18,7 +19,7 @@ try {
     })
 } catch (error) {
     // If contextIsolation is disabled, attach directly to window (Linux workaround)
-    ;(window as any).electron = {
+    ; (window as any).electron = {
         ipcRenderer: {
             send: (channel: string, args: any[]) => ipcRenderer.send(channel, args),
             on: (channel: string, func: (...args: any[]) => void) => {

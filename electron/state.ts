@@ -9,6 +9,10 @@ export const setProject = (project: CurrentProject | null) => {
     currentProject = project;
 };
 
+export const getProject = () => {
+    return currentProject;
+};
+
 
 let serverPort: number | null = null;
 

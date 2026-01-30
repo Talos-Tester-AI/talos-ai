@@ -789,8 +789,8 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
             }
 
             // Build test cases in executor format
-            const serverPort = getServerPort();
-            const serverUrl = serverPort ? `http://localhost:${serverPort}` : undefined;
+            const serverPort = getServerPort() || 3001;
+            const serverUrl = `http://localhost:${serverPort}`;
 
             const testCasesForExecutor = testCasesToRun.map((tc: any) => {
                 const feature = featuresToRun.find((f: any) => f._id === tc.featureId);
@@ -812,14 +812,18 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
                 };
             });
 
+            // Determine workspace folder (prioritize explicit folderPath from project settings)
+            const workspaceFolder = (plan.project.folderPath as string) || currentProject.path;
+
             // Build execution request
             const executionRequest = {
                 testRunId: runId,
                 projectId: currentProject.id,
-                deviceId: launchConfig?.options?.deviceId || null,
+                serverUrl: serverUrl,
+                deviceId: (launchConfig as any)?.options?.deviceId || null,
                 launchConfig: launchConfig ? {
                     ...launchConfig,
-                    cwd: launchConfig.cwd || currentProject.path
+                    cwd: ((launchConfig as any).cwd || workspaceFolder).replace(/\$\{workspaceFolder\}/g, workspaceFolder)
                 } : null,
                 features: featuresMap,
                 testCases: testCasesForExecutor

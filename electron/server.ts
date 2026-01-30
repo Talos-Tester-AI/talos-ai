@@ -6,7 +6,8 @@ import fs from 'fs-extra';
 import crypto from 'node:crypto';
 import Store from 'electron-store';
 import { getProject } from './state';
-import { BrowserWindow } from 'electron';
+import electron from 'electron';
+const { BrowserWindow } = electron;
 import { discoverProjectFiles, readProjectContext } from './file-scanner';
 import { generateTestProposal, validateAIConfig, type AIConfig } from './ai-analyzer';
 import { analyzeFigmaProject, buildFigmaContext, validateFigmaConfig, type FigmaAnalysisResult } from './figma-analyzer';
@@ -51,37 +52,55 @@ function fixGeminiModelIfNeeded(config: AIConfig): AIConfig {
     if (config.provider !== 'gemini') {
         return config;
     }
-    
+
     const fixedConfig = { ...config };
     let changed = false;
-    
+
     // Check and fix complexModel if it's a known problematic model
     if (GEMINI_MODEL_FIXES[config.complexModel]) {
         console.log(`[server] Fixing Gemini complexModel: ${config.complexModel} -> ${GEMINI_MODEL_FIXES[config.complexModel]}`);
         fixedConfig.complexModel = GEMINI_MODEL_FIXES[config.complexModel];
         changed = true;
     }
-    
+
     // Check and fix simpleModel if it's a known problematic model
     if (GEMINI_MODEL_FIXES[config.simpleModel]) {
         console.log(`[server] Fixing Gemini simpleModel: ${config.simpleModel} -> ${GEMINI_MODEL_FIXES[config.simpleModel]}`);
         fixedConfig.simpleModel = GEMINI_MODEL_FIXES[config.simpleModel];
         changed = true;
     }
-    
+
     // Update stored config if we made changes
     if (changed) {
         store.set('aiConfig', fixedConfig);
         console.log('[server] Updated stored AI config with working Gemini models');
     }
-    
+
     return fixedConfig;
 }
 
-export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow) {
+export function startAgentServer(port: number = 3000, mainWindow: InstanceType<typeof BrowserWindow>) {
     const app = express();
     app.use(cors());
     app.use(bodyParser.json({ limit: '50mb' }));
+
+    // SSE Management
+    const activeStreams = new Map<string, Set<express.Response>>();
+
+    const broadcast = (testRunId: string, eventName: string, payload: any) => {
+        const streams = activeStreams.get(testRunId);
+        if (streams) {
+            const message = `event: ${eventName}\ndata: ${JSON.stringify({ data: payload })}\n\n`;
+            for (const res of streams) {
+                try {
+                    res.write(message);
+                } catch (e) {
+                    // Connection likely closed, will be cleaned up by close handler
+                    console.error('Error broadcasting to stream:', e);
+                }
+            }
+        }
+    };
 
     // Helper to find run folder
     const getRunDir = async (runId: string) => {
@@ -105,6 +124,47 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
         }
         return null;
     };
+
+    // SSE Stream Endpoint
+    app.get('/api/test-runs/:id/stream', async (req, res) => {
+        const testRunId = req.params.id;
+
+        // Setup SSE headers
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        // Add to active streams
+        if (!activeStreams.has(testRunId)) {
+            activeStreams.set(testRunId, new Set());
+        }
+        activeStreams.get(testRunId)?.add(res);
+
+        // Send initial state
+        try {
+            const runDir = await getRunDir(testRunId);
+            if (runDir) {
+                const runJsonPath = path.join(runDir, 'run.json');
+                if (await fs.pathExists(runJsonPath)) {
+                    const runData = await fs.readJson(runJsonPath);
+                    res.write(`event: initial_state\ndata: ${JSON.stringify({ data: runData })}\n\n`);
+                }
+            }
+        } catch (e) {
+            console.error('Error sending initial state:', e);
+        }
+
+        // Clean up on close
+        req.on('close', () => {
+            const streams = activeStreams.get(testRunId);
+            if (streams) {
+                streams.delete(res);
+                if (streams.size === 0) {
+                    activeStreams.delete(testRunId);
+                }
+            }
+        });
+    });
 
     // Step Result
     app.post('/api/executor/step-result', async (req, res) => {
@@ -154,8 +214,9 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
 
             await fs.writeJson(runJsonPath, runData, { spaces: 2 });
 
-            // Notify Frontend via IPC
+            // Notify Frontend via IPC and SSE
             mainWindow.webContents.send('agent:step-result', result);
+            broadcast(testRunId, 'step_result', result);
 
             res.json({ status: 'saved' });
         } catch (e: any) {
@@ -178,6 +239,7 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                 await fs.writeJson(runJsonPath, runData, { spaces: 2 });
 
                 mainWindow.webContents.send('agent:run-status', { testRunId, status, message });
+                broadcast(testRunId, 'status', { status, summary: message });
             }
             res.json({ status: 'ok' });
         } catch (e: any) {
@@ -196,6 +258,7 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
 
                 // Also stream to frontend
                 mainWindow.webContents.send('agent:build-log', { testRunId, log });
+                broadcast(testRunId, 'build_log', { log });
             }
             res.json({ status: 'ok' });
         } catch (e: any) {
@@ -217,6 +280,13 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
 
                 await fs.writeJson(runJsonPath, runData, { spaces: 2 });
                 mainWindow.webContents.send('agent:test-case-complete', req.body);
+                // Broadcast with status property derived from passed boolean if needed, 
+                // but req.body might not have 'status' string. Frontend expects 'status'.
+                // req.body has { testRunId, testCaseId, passed, summary }
+                broadcast(testRunId, 'test_case_complete', {
+                    ...req.body,
+                    status: passed ? 'passed' : 'failed'
+                });
             }
             res.json({ status: 'ok' });
         } catch (e: any) {
@@ -238,6 +308,7 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
 
                 await fs.writeJson(runJsonPath, runData, { spaces: 2 });
                 mainWindow.webContents.send('agent:run-complete', req.body);
+                broadcast(testRunId, 'run_complete', req.body);
             }
             res.json({ status: 'ok' });
         } catch (e: any) {
@@ -247,13 +318,15 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
 
     // Feature Setup Result
     app.post('/api/executor/feature-setup-result', async (req, res) => {
-        // Similar to step result but storing in run.json under separate key or generic events
-        // For simplicity, just log it and notify frontend
+        const { testRunId } = req.body;
+        broadcast(testRunId, 'feature_setup_result', req.body);
         res.json({ status: 'ok' });
     });
 
     // Feature Teardown Result
     app.post('/api/executor/feature-teardown-result', async (req, res) => {
+        const { testRunId } = req.body;
+        broadcast(testRunId, 'feature_teardown_result', req.body);
         res.json({ status: 'ok' });
     });
 
@@ -285,10 +358,10 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
             // Load project data
             const plan = await fs.readJson(planPath);
             const projectData = plan.project || {};
-            
+
             // Determine the source path for scanning
             const sourcePath = projectData.folderPath || projectPath;
-            
+
             // Get AI configuration
             let aiConfig = store.get('aiConfig');
             if (!validateAIConfig(aiConfig)) {
@@ -296,7 +369,7 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                 res.end();
                 return;
             }
-            
+
             // Fix invalid Gemini models if needed
             aiConfig = fixGeminiModelIfNeeded(aiConfig);
 
@@ -308,13 +381,13 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
 
             // Stage 1: Discovery
             sendEvent({ stage: 'discovery', message: 'Discovering project files...', detail: 'Scanning project directory' });
-            
+
             let scanResult;
             try {
                 scanResult = await discoverProjectFiles(sourcePath);
-                sendEvent({ 
-                    stage: 'discovery', 
-                    message: 'File discovery complete', 
+                sendEvent({
+                    stage: 'discovery',
+                    message: 'File discovery complete',
                     detail: `Found ${scanResult.totalFiles} files (${(scanResult.totalSize / 1024).toFixed(1)} KB) - ${scanResult.projectType} project`
                 });
             } catch (e: any) {
@@ -323,17 +396,17 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                 res.end();
                 return;
             }
-            
+
             // Stage 2: Reading
             sendEvent({ stage: 'reading', message: 'Reading project context...', detail: 'Analyzing project structure' });
-            
+
             let projectContext: string;
             try {
                 const contextResult = await readProjectContext(scanResult.files);
                 projectContext = contextResult.context;
-                sendEvent({ 
-                    stage: 'reading', 
-                    message: 'Context reading complete', 
+                sendEvent({
+                    stage: 'reading',
+                    message: 'Context reading complete',
                     detail: `Read ${contextResult.filesRead} files${contextResult.truncated ? ' (truncated)' : ''}`
                 });
                 console.log(`[server] Read ${contextResult.filesRead} files, context size: ${(projectContext.length / 1024).toFixed(1)} KB`);
@@ -343,51 +416,51 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                 res.end();
                 return;
             }
-            
+
             // Stage 4: Figma (if configured) - Do this before AI so we can include it in context
             let figmaAnalysis: FigmaAnalysisResult | null = null;
             const figmaUrl = config.figmaProjectUrl || projectData.figmaProjectUrl;
             const figmaToken = config.figmaAccessToken || projectData.figmaAccessToken;
-            
+
             if (figmaUrl && figmaToken) {
                 const figmaValidation = validateFigmaConfig(figmaUrl, figmaToken);
                 if (figmaValidation.valid) {
                     sendEvent({ stage: 'figma', message: 'Processing Figma designs...', detail: 'Fetching design data' });
-                    
+
                     try {
                         figmaAnalysis = await analyzeFigmaProject(figmaUrl, figmaToken, (msg) => {
                             sendEvent({ stage: 'figma', message: 'Processing Figma designs...', detail: msg });
                         });
-                        
+
                         // Add Figma context to project context
                         const figmaContext = buildFigmaContext(figmaAnalysis);
                         projectContext += figmaContext;
-                        
-                        sendEvent({ 
-                            stage: 'figma', 
-                            message: 'Figma analysis complete', 
+
+                        sendEvent({
+                            stage: 'figma',
+                            message: 'Figma analysis complete',
                             detail: `Found ${figmaAnalysis.screens.length} screens, ${figmaAnalysis.components.length} components`
                         });
                     } catch (e: any) {
                         console.error('[server] Figma analysis error:', e);
                         // Don't fail the entire analysis, just skip Figma
-                        sendEvent({ 
-                            stage: 'figma', 
-                            message: 'Figma analysis skipped', 
+                        sendEvent({
+                            stage: 'figma',
+                            message: 'Figma analysis skipped',
                             detail: `Error: ${e.message}`
                         });
                     }
                 }
             }
-            
+
             // Stage 3: AI Analysis
             sendEvent({ stage: 'analysis', message: 'Performing AI analysis...', detail: `Using ${aiConfig.provider} (${aiConfig.complexModel})` });
-            
+
             let proposal;
             try {
                 // Get existing feature names to help AI understand what already exists
                 const existingFeatures = (plan.features || []).map((f: any) => f.name);
-                
+
                 proposal = await generateTestProposal(
                     aiConfig,
                     projectContext,
@@ -399,11 +472,11 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                         sendEvent({ stage: 'analysis', message: 'Performing AI analysis...', detail: msg });
                     }
                 );
-                
+
                 const totalTestCases = proposal.features.reduce((sum, f) => sum + f.testCases.length, 0);
-                sendEvent({ 
-                    stage: 'analysis', 
-                    message: 'AI analysis complete', 
+                sendEvent({
+                    stage: 'analysis',
+                    message: 'AI analysis complete',
                     detail: `Generated ${proposal.features.length} features with ${totalTestCases} test cases`
                 });
                 console.log(`[server] Generated ${proposal.features.length} features with ${totalTestCases} test cases`);
@@ -413,10 +486,10 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                 res.end();
                 return;
             }
-            
+
             // Stage 5: Complete
             sendEvent({ stage: 'complete', message: 'Finalizing...', detail: 'Preparing results' });
-            
+
             // Send final result
             const result = {
                 proposal: proposal,
@@ -425,10 +498,10 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                     components: figmaAnalysis.components
                 } : null
             };
-            
+
             sendEvent({ stage: 'result', result });
             res.end();
-            
+
         } catch (e: any) {
             console.error('Error in project analysis:', e);
             res.write(`data: ${JSON.stringify({ stage: 'error', error: e.message })}\n\n`);
@@ -461,7 +534,7 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                 for (const feature of proposal.features) {
                     // Generate feature ID
                     const featureId = crypto.randomBytes(12).toString('hex');
-                    
+
                     // Add feature WITHOUT nested test cases
                     newFeatures.push({
                         _id: featureId,
@@ -472,7 +545,7 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
                         globalSetup: feature.globalSetup,
                         globalTeardown: feature.globalTeardown
                     });
-                    
+
                     // Extract test cases and link to feature
                     if (feature.testCases && Array.isArray(feature.testCases)) {
                         for (const tc of feature.testCases) {
@@ -498,13 +571,13 @@ export function startAgentServer(port: number = 3000, mainWindow: BrowserWindow)
             // Handle launch configurations if present
             if (proposal.launchConfigurations && Array.isArray(proposal.launchConfigurations)) {
                 console.log(`[server] Importing ${proposal.launchConfigurations.length} launch configurations`);
-                
+
                 // Add IDs to launch configs if not present
                 const launchConfigs = proposal.launchConfigurations.map((lc: any) => ({
                     _id: lc._id || crypto.randomBytes(12).toString('hex'),
                     ...lc
                 }));
-                
+
                 // Merge with existing configs (or replace them)
                 plan.project.launchConfigurations = [...(plan.project.launchConfigurations || []), ...launchConfigs];
             }

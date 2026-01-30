@@ -1,4 +1,5 @@
-import { app } from 'electron';
+import electron from 'electron';
+const { app } = electron;
 import path from 'node:path';
 import fs from 'fs-extra';
 
@@ -27,19 +28,19 @@ const getStorePath = (): string => {
  */
 export async function getProjectsFromStore(): Promise<StoredProject[]> {
     const storePath = getStorePath();
-    
+
     try {
         if (!await fs.pathExists(storePath)) {
             return [];
         }
-        
+
         const data = await fs.readJson(storePath);
         const projects: StoredProject[] = data.projects || [];
-        
+
         // Validate that each project's folder still exists
         const validProjects: StoredProject[] = [];
         let hasChanges = false;
-        
+
         for (const project of projects) {
             if (await fs.pathExists(project.path)) {
                 validProjects.push(project);
@@ -48,12 +49,12 @@ export async function getProjectsFromStore(): Promise<StoredProject[]> {
                 console.log(`[projectStore] Project folder no longer exists, removing: ${project.path}`);
             }
         }
-        
+
         // If we removed any invalid projects, save the updated list
         if (hasChanges) {
             await fs.writeJson(storePath, { projects: validProjects }, { spaces: 2 });
         }
-        
+
         return validProjects;
     } catch (error) {
         console.error('[projectStore] Failed to read projects:', error);
@@ -67,18 +68,18 @@ export async function getProjectsFromStore(): Promise<StoredProject[]> {
  */
 export async function addProjectToStore(project: StoredProject): Promise<void> {
     const storePath = getStorePath();
-    
+
     try {
         let projects: StoredProject[] = [];
-        
+
         if (await fs.pathExists(storePath)) {
             const data = await fs.readJson(storePath);
             projects = data.projects || [];
         }
-        
+
         // Check if project already exists
         const existingIndex = projects.findIndex(p => p._id === project._id);
-        
+
         if (existingIndex >= 0) {
             // Update existing project
             projects[existingIndex] = {
@@ -90,7 +91,7 @@ export async function addProjectToStore(project: StoredProject): Promise<void> {
             // Add new project at the beginning (most recent first)
             projects.unshift(project);
         }
-        
+
         await fs.writeJson(storePath, { projects }, { spaces: 2 });
         console.log(`[projectStore] Project saved: ${project.name}`);
     } catch (error) {
@@ -104,17 +105,17 @@ export async function addProjectToStore(project: StoredProject): Promise<void> {
  */
 export async function removeProjectFromStore(id: string): Promise<void> {
     const storePath = getStorePath();
-    
+
     try {
         if (!await fs.pathExists(storePath)) {
             return;
         }
-        
+
         const data = await fs.readJson(storePath);
         const projects: StoredProject[] = data.projects || [];
-        
+
         const filteredProjects = projects.filter(p => p._id !== id);
-        
+
         if (filteredProjects.length !== projects.length) {
             await fs.writeJson(storePath, { projects: filteredProjects }, { spaces: 2 });
             console.log(`[projectStore] Project removed: ${id}`);
@@ -130,17 +131,17 @@ export async function removeProjectFromStore(id: string): Promise<void> {
  */
 export async function updateProjectInStore(id: string, data: Partial<StoredProject>): Promise<void> {
     const storePath = getStorePath();
-    
+
     try {
         if (!await fs.pathExists(storePath)) {
             return;
         }
-        
+
         const storeData = await fs.readJson(storePath);
         const projects: StoredProject[] = storeData.projects || [];
-        
+
         const index = projects.findIndex(p => p._id === id);
-        
+
         if (index >= 0) {
             projects[index] = {
                 ...projects[index],
