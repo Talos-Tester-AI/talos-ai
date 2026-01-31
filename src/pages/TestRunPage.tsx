@@ -67,7 +67,8 @@ export const TestRunPage = () => {
       });
 
       // Navigate to live test run page
-      navigate(`/test-runs/${response._id}`);
+      const run = response as { _id: string };
+      navigate(`/test-runs/${run._id}`);
     } catch (error: any) {
       console.error('Failed to start test run:', error);
       alert(error.message || 'Failed to start test run');
@@ -135,13 +136,13 @@ export const TestRunPage = () => {
           </div>
         ) : (
           <div className="space-y-2">
-            {project.launchConfigurations.map((config) => {
+            {project.launchConfigurations.map((config, index) => {
               const isSelected = selectedLaunchConfigIds.includes(config._id!);
               const isExpanded = expandedLaunchConfigId === config._id;
 
               return (
                 <div
-                  key={config._id}
+                  key={config._id || index}
                   className={clsx(
                     "border rounded-lg transition-all",
                     isSelected ? "border-blue-500 bg-blue-50/10" : "border-gray-200"
@@ -227,7 +228,7 @@ export const TestRunPage = () => {
 
         <div className="flex flex-col items-end gap-1">
           <Button
-            onClick={handleStartRun}
+            onClick={() => handleStartRun()}
             disabled={!canStart || starting}
             className="px-8 shadow-xl"
           >
