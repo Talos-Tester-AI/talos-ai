@@ -74,7 +74,7 @@ function createWindow() {
     })
 
     setupHandlers(win)
-    const port = 3001;
+    const port = 3101;
     startAgentServer(port, win)
     setServerPort(port);
 

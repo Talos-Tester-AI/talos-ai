@@ -209,19 +209,42 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
     // Project Create
     ipcMain.handle('project:create', async (_, data) => {
         // If folderPath is provided, use it. Otherwise open dialog.
-        let projectPath = data.folderPath;
+        let parentFolderPath = data.folderPath;
 
-        if (!projectPath) {
+        if (!parentFolderPath) {
             const result = await dialog.showOpenDialog(mainWindow, {
-                title: 'Select Folder for New Project',
+                title: 'Select Parent Folder for New Project',
                 properties: ['openDirectory', 'createDirectory']
             });
 
             if (result.canceled || result.filePaths.length === 0) {
                 return null;
             }
-            projectPath = result.filePaths[0];
+            parentFolderPath = result.filePaths[0];
         }
+
+        // Construct the full project path: parent/ProjectName
+        if (!data.name) {
+            throw new Error("Project name is required to create a project directory.");
+        }
+
+        const projectPath = path.join(parentFolderPath, data.name);
+
+        // Check if directory already exists to prevent accidental overwrite or confusion
+        if (await fs.pathExists(projectPath)) {
+            // It's okay if it exists but is empty? 
+            // For safety, let's just error if it exists for now, consistent with "New Project" semantics
+            // Or only error if it already has a plan.json?
+            // User requested "ensure valid directory name and create new directory".
+            // If it exists, we should probably warn.
+            const files = await fs.readdir(projectPath);
+            if (files.length > 0) {
+                throw new Error(`Directory already exists and is not empty: ${projectPath}`);
+            }
+        }
+
+        // Create the directory
+        await fs.ensureDir(projectPath);
 
         const projectId = encodeId(projectPath);
 
@@ -229,14 +252,14 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
 
         const planPath = path.join(projectPath, 'test-plan', 'plan.json');
 
-        // Ensure structure exists
+        // Ensure structure exists inside the NEW project directory
         await fs.ensureDir(path.join(projectPath, 'test-plan'));
         await fs.ensureDir(path.join(projectPath, 'test-run'));
 
         // Initialize with form data
         const projectData = {
             _id: projectId,
-            name: data.name || path.basename(projectPath),
+            name: data.name,
             baseUrl: data.baseUrl || '',
             systemContext: data.systemContext || '',
             createdAt: new Date().toISOString(),
@@ -705,6 +728,30 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
         };
     });
 
+    // Test Run Cancel
+    ipcMain.handle('testrun:cancel', async (_, runId) => {
+        console.log('[handlers] testrun:cancel called for:', runId);
+        try {
+            // Call executor to cancel
+            const response = await fetch(`${EXECUTOR_URL}/execute/cancel/${runId}`, {
+                method: 'POST'
+            });
+
+            if (!response.ok) {
+                const error = await response.text();
+                console.error('[handlers] Failed to cancel test run on executor:', error);
+                throw new Error(`Failed to cancel: ${error}`);
+            }
+
+            const result = await response.json();
+            console.log('[handlers] Cancellation result:', result);
+            return result;
+        } catch (error) {
+            console.error('[handlers] Error cancelling test run:', error);
+            throw error;
+        }
+    });
+
     // Test Run Create
     ipcMain.handle('testrun:create', async (_, data) => {
         // data: { projectId, selectedFeatureIds, selectedTestCases, selectedLaunchConfigIds, scope }
@@ -732,13 +779,18 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
 
         // === Send AI configuration to executor ===
         const aiConfig = store.get('aiConfig');
+
+        // CRITICAL: Block test execution if no AI key is configured
+        if (!aiConfig?.apiKey) {
+            console.error('[handlers] AI Configuration Missing - Blocking test run creation');
+            throw new Error("AI Configuration Missing: Please configure an API Key in settings before starting a test. This is required for result verification.");
+        }
+
         if (aiConfig?.apiKey) {
             const configSuccess = await sendConfigToExecutor(aiConfig.apiKey);
             if (!configSuccess) {
                 console.warn('[handlers] Could not configure executor with API key, execution may fail');
             }
-        } else {
-            console.warn('[handlers] No AI config found, executor will use its .env configuration');
         }
 
         // === Build execution request and trigger executor ===
@@ -802,8 +854,8 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
             }
 
             // Build test cases in executor format
-            const serverPort = getServerPort() || 3001;
-            const serverUrl = `http://localhost:${serverPort}`;
+            const serverPort = getServerPort() || 3101;
+            const serverUrl = `http://127.0.0.1:${serverPort}`;
 
             const testCasesForExecutor = testCasesToRun.map((tc: any) => {
                 const feature = featuresToRun.find((f: any) => f._id === tc.featureId);
@@ -833,6 +885,11 @@ export function setupHandlers(mainWindow: InstanceType<typeof BrowserWindow>) {
                 testRunId: runId,
                 projectId: currentProject.id,
                 serverUrl: serverUrl,
+                aiConfig: aiConfig ? {
+                    provider: aiConfig.provider,
+                    apiKey: aiConfig.apiKey,
+                    model: aiConfig.complexModel // Use complex model for agent execution
+                } : null,
                 deviceId: (launchConfig as any)?.options?.deviceId || null,
                 launchConfig: launchConfig ? {
                     ...launchConfig,

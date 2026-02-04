@@ -377,7 +377,7 @@ export const TestRunLivePage = () => {
       const response = await getTestRun(testRunId!);
       const run = response.data;
       setTestRun(run);
-      if (run.buildLogs) {
+      if (run.buildLogs && run.buildLogs.length > 0) {
         setBuildLogs(run.buildLogs);
       }
 
@@ -787,7 +787,7 @@ export const TestRunLivePage = () => {
     return <div className="text-center py-12">Test run not found</div>;
   }
 
-  const isRunning = testRun.status === 'running';
+  const isRunning = !['completed', 'failed', 'cancelled'].includes(testRun.status);
 
   return (
     <div>
@@ -878,6 +878,28 @@ export const TestRunLivePage = () => {
           )
         }
       </Card >
+
+      {/* Conclusion Card */}
+      {
+        ['completed', 'failed', 'cancelled'].includes(testRun.status) && (
+          <Card className="mb-6 border-l-4 border-indigo-500 bg-indigo-50">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-indigo-900">Test Run Concluded</h3>
+                <p className="text-indigo-700">
+                  The test run has finished with status: <span className="font-bold uppercase">{testRun.status}</span>
+                </p>
+              </div>
+              <Button
+                onClick={() => navigate(`/projects/${testRun.projectId}`)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white"
+              >
+                Return to Project
+              </Button>
+            </div>
+          </Card>
+        )
+      }
 
       {
         (testRun.status !== 'pending') && (

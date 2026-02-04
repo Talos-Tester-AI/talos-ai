@@ -13,7 +13,7 @@ import { fetchProjects, createProjectThunk, fetchProject } from '../store/slices
 export const ProjectsPage = () => {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  
+
   // Read from Redux state
   const { projects, loading } = useAppSelector(state => state.project);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -47,17 +47,26 @@ export const ProjectsPage = () => {
       alert("Please select a folder");
       return;
     }
+
+    // Validate project name - only alphanumeric, underscores, and hyphens allowed
+    const nameRegex = /^[a-zA-Z0-9_\-]+$/;
+    if (!nameRegex.test(formData.name)) {
+      alert("Project name must only contain letters, numbers, underscores, and hyphens.");
+      return;
+    }
+
     try {
       // Create project (saves to storage + loads into Redux)
+      // NOTE: backend will now create a SUBDIRECTORY with the project name
       const result = await dispatch(createProjectThunk(formData)).unwrap();
-      
+
       // Close modal and navigate to project page
       setIsModalOpen(false);
       setFormData({ name: '', baseUrl: '', systemContext: '', folderPath: '' });
       navigate(`/projects/${result._id}`);
     } catch (error) {
       console.error('Failed to create project:', error);
-      alert('Failed to create project');
+      alert(`Failed to create project: ${error}`);
     }
   };
 
@@ -66,17 +75,17 @@ export const ProjectsPage = () => {
       console.log('[ProjectsPage] Opening project via dialog...');
       const response = await selectProjectFolder();
       console.log('[ProjectsPage] Dialog response:', response);
-      
+
       if (response.data) {
         const projectId = response.data._id;
         console.log('[ProjectsPage] Project selected:', projectId);
-        
+
         // IMMEDIATELY LOAD THE ENTIRE PROJECT INTO REDUX - WAIT FOR IT!
         console.log('[ProjectsPage] LOADING PROJECT INTO REDUX WITH ALL DATA');
         await dispatch(fetchProjects()).unwrap();
         await dispatch(fetchProject(projectId)).unwrap();
         console.log('[ProjectsPage] Redux loaded, now navigating');
-        
+
         // Now navigate
         navigate(`/projects/${projectId}`);
       } else {

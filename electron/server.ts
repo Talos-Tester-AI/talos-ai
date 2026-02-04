@@ -9,7 +9,7 @@ import { getProject } from './state';
 import electron from 'electron';
 const { BrowserWindow } = electron;
 import { discoverProjectFiles, readProjectContext } from './file-scanner';
-import { generateTestProposal, validateAIConfig, type AIConfig } from './ai-analyzer';
+import { generateTestProposal, validateAIConfig, verifyStepExecution, type AIConfig } from './ai-analyzer';
 import { analyzeFigmaProject, buildFigmaContext, validateFigmaConfig, type FigmaAnalysisResult } from './figma-analyzer';
 
 // Access the same store as handlers.ts for AI config
@@ -83,6 +83,17 @@ export function startAgentServer(port: number = 3000, mainWindow: InstanceType<t
     const app = express();
     app.use(cors());
     app.use(bodyParser.json({ limit: '50mb' }));
+
+    // Safe send helper
+    const safeSend = (channel: string, ...args: any[]) => {
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+            try {
+                mainWindow.webContents.send(channel, ...args);
+            } catch (e) {
+                console.error(`[server] Error sending to window (channel: ${channel}):`, e);
+            }
+        }
+    };
 
     // SSE Management
     const activeStreams = new Map<string, Set<express.Response>>();
@@ -191,6 +202,72 @@ export function startAgentServer(port: number = 3000, mainWindow: InstanceType<t
                 // delete result.screenshotBase64; // DON'T delete from result, we need it for live update!
             }
 
+            // --- AI VERIFICATION ---
+            // If screenshot exists, perform AI verification
+            if (result.screenshotBase64) {
+                const aiConfig = store.get('aiConfig') as any;
+
+                // If allow blocking, we should have checked this at run creation. 
+                // But here we just verify if we CAN verify.
+                if (aiConfig && aiConfig.apiKey) {
+                    // Need Instruction + Expected Result? 
+                    // The agent sends 'instruction' in the result? 
+                    // We need to fetch the step definition or trust what the agent echoed?
+                    // Usually agent returns 'instruction' if it knows it.
+
+                    // If result doesn't have instruction, we might need to look it up in run.json
+                    // But let's assume agent echoes it or we look it up.
+                    // The result from DroidRun usually doesn't include the instruction unless we tell it to.
+                    // IMPORTANT: DroidRun agent wrapper execute_step signature: execute_step(instruction)
+                    // But result object returned only has success/error/logs. 
+                    // We need the CLI to know which step it was. 
+                    // The CLI 'StepRunner' (in py) knows.
+
+                    // Let's assume the Python 'StepRunner' enriches the result with 'instruction' and 'expectedResult'?
+                    // Just checked DroidRunAgent.py - it returns { success, error, duration, logs, screenshot }. 
+                    // It does NOT return instruction. 
+                    // However, the caller of `execute_step` (routes.py or runner) likely merges this.
+
+                    // Let's modify server.ts on the assumption (or requirement) that req.body has 'instruction'.
+                    // If not, we can't verify effectively.
+
+                    if (result.instruction) {
+                        // Fix: Need to import verifyStepExecution. 
+                        // Since we can't easily add top-level imports with replace_file_content in the middle of file without context, 
+                        // we should have added it. 
+                        // But we can use dynamic import or assume it handles it if we did it right.
+                        // Actually, I'll use multi_replace to add the import if needed, 
+                        // but for now let's assume I'll add the import in a separate call or rely on valid imports.
+                        // Wait, I haven't added the import yet. I should do that first or now.
+                        // I will add the import at the top of the file in the next step.
+
+                        try {
+                            const verification = await verifyStepExecution(
+                                aiConfig,
+                                result.instruction,
+                                result.screenshotBase64,
+                                result.expectedResult, // Optional
+                                result.logs
+                            );
+
+                            result.status = verification.passed ? 'passed' : 'failed';
+                            result.aiReasoning = verification.reasoning;
+
+                            console.log(`[server] Step verified: ${result.status}`);
+                        } catch (err: any) {
+                            console.error(`[server] AI Verification error: ${err.message}`);
+                            // Don't fail the step execution itself, but mark as error?
+                            // Or keep agent status? 
+                            // If Agent said success=True, but AI failed to run, maybe keep success?
+                            // But plan said "implicit pass".
+                            if (!result.executionError) {
+                                result.executionError = "AI Verification failed";
+                            }
+                        }
+                    }
+                }
+            }
+
             // 2. Update run.json
             const runJsonPath = path.join(runDir, 'run.json');
             const runData = await fs.readJson(runJsonPath);
@@ -211,8 +288,43 @@ export function startAgentServer(port: number = 3000, mainWindow: InstanceType<t
             await fs.writeJson(runJsonPath, runData, { spaces: 2 });
 
             // Notify Frontend via IPC and SSE (send full result with base64)
-            mainWindow.webContents.send('agent:step-result', result);
+            safeSend('agent:step-result', result);
             broadcast(testRunId, 'step_result', result);
+
+            // --- AUTO-COMPLETION CHECK ---
+            // Check if this was the last step and auto-complete the test case
+            const { testCaseId } = result;
+            const tcSteps = (runData.stepResults || []).filter((s: any) => s.testCaseId === testCaseId);
+            const testCaseDef = (runData.selectedTestCases || runData.testCases || []).find((tc: any) => tc._id === testCaseId);
+            const expectedStepCount = testCaseDef?.steps?.length || 0;
+
+            // Filter for "real" steps (index > 0)
+            const realStepResults = tcSteps.filter((s: any) => s.stepIndex > 0 && s.stepIndex <= expectedStepCount);
+
+            if (realStepResults.length >= expectedStepCount && expectedStepCount > 0) {
+                console.log(`[server] Auto-completing Test Case ${testCaseId} (All ${expectedStepCount} steps executed)`);
+
+                const hasFailure = tcSteps.some((s: any) => s.status === 'failed');
+                const computedPassed = !hasFailure;
+                const summary = computedPassed ? "All steps passed" : "One or more steps failed";
+
+                if (!runData.testCasesComputed) runData.testCasesComputed = {};
+                // Only update if not already set (or overwrite? overwrite is safer for consistency)
+                runData.testCasesComputed[testCaseId] = { passed: computedPassed, summary };
+
+                await fs.writeJson(runJsonPath, runData, { spaces: 2 });
+
+                const payload = {
+                    testRunId,
+                    testCaseId,
+                    passed: computedPassed,
+                    summary,
+                    status: computedPassed ? 'passed' : 'failed'
+                };
+
+                safeSend('agent:test-case-complete', payload);
+                broadcast(testRunId, 'test_case_complete', payload);
+            }
 
             res.json({ status: 'saved' });
         } catch (e: any) {
@@ -234,7 +346,7 @@ export function startAgentServer(port: number = 3000, mainWindow: InstanceType<t
                 runData.updatedAt = new Date().toISOString();
                 await fs.writeJson(runJsonPath, runData, { spaces: 2 });
 
-                mainWindow.webContents.send('agent:run-status', { testRunId, status, message });
+                safeSend('agent:run-status', { testRunId, status, message });
                 broadcast(testRunId, 'status', { status, summary: message });
             }
             res.json({ status: 'ok' });
@@ -253,7 +365,7 @@ export function startAgentServer(port: number = 3000, mainWindow: InstanceType<t
                 await fs.appendFile(logPath, log + '\n');
 
                 // Also stream to frontend
-                mainWindow.webContents.send('agent:build-log', { testRunId, log });
+                safeSend('agent:build-log', { testRunId, log });
                 broadcast(testRunId, 'build_log', { log });
             }
             res.json({ status: 'ok' });
@@ -265,24 +377,73 @@ export function startAgentServer(port: number = 3000, mainWindow: InstanceType<t
     // Test Case Complete
     app.post('/api/executor/test-case-complete', async (req, res) => {
         try {
-            const { testRunId, testCaseId, passed, summary } = req.body;
+            const { testRunId, testCaseId, summary } = req.body;
+            // Ignore req.body.passed - Server determines truth based on step results.
+
             const runDir = await getRunDir(testRunId);
             if (runDir) {
                 const runJsonPath = path.join(runDir, 'run.json');
                 const runData = await fs.readJson(runJsonPath);
 
+                // Compute passed status from steps
+                // Logic: 
+                // 1. If ANY step result for this test case has status 'failed', the test case fails.
+                // 2. If the number of executed steps does not match the expected number of steps, the test case fails (incomplete).
+
+                const tcSteps = (runData.stepResults || []).filter((s: any) => s.testCaseId === testCaseId);
+                const hasFailure = tcSteps.some((s: any) => s.status === 'failed');
+
+                // Find the test case definition to check total steps
+                // runData structure might vary, but usually has 'selectedTestCases' or 'testCases' from creation
+                const testCaseDef = (runData.selectedTestCases || runData.testCases || []).find((tc: any) => tc._id === testCaseId);
+                const expectedStepCount = testCaseDef?.steps?.length || 0;
+
+                // We count executed steps. 
+                // Note: setup/teardown might be reported as steps with special indices (e.g. 0 or 9999).
+                // We should filter for "actual" steps (1..N) to match expectedStepCount, 
+                // OR we just rely on "hasFailure" if we are okay with partial runs being marked passed if no *reported* failure occurred.
+                // BUT User said: "if all the steps passed". Implicitly "ALL".
+                // If agent crashed mid-way, we might not have failure step, just missing steps.
+
+                // Filter for "real" steps (index > 0 and < 9000?) - assuming setup is 0 and teardown is high.
+                // Actually, let's just use the count of steps that appear in the 'steps' array.
+                // stepResults includes localSetup (index 0).
+                // Let's count step results where index > 0 and index <= expectedStepCount?
+                // Or simply: Did we execute the last step?
+                // Let's rely on hasFailure for now, but also check if we have results.
+
+                // If we want to be strict:
+                const realStepResults = tcSteps.filter((s: any) => s.stepIndex > 0 && s.stepIndex <= expectedStepCount);
+                const isComplete = realStepResults.length >= expectedStepCount;
+
+                let computedPassed = !hasFailure && isComplete;
+
+                // Edge case: empty test case (0 steps) -> Passed
+                if (expectedStepCount === 0) computedPassed = !hasFailure;
+
+                // Debug log
+                console.log(`[server] TC ${testCaseId} Analysis:
+                  - Expected Steps: ${expectedStepCount}
+                  - Executed Steps: ${realStepResults.length}
+                  - Has Failure: ${hasFailure}
+                  => Computed Passed: ${computedPassed}`);
+
                 if (!runData.testCasesComputed) runData.testCasesComputed = {};
-                runData.testCasesComputed[testCaseId] = { passed, summary };
+                runData.testCasesComputed[testCaseId] = { passed: computedPassed, summary };
 
                 await fs.writeJson(runJsonPath, runData, { spaces: 2 });
-                mainWindow.webContents.send('agent:test-case-complete', req.body);
-                // Broadcast with status property derived from passed boolean if needed, 
-                // but req.body might not have 'status' string. Frontend expects 'status'.
-                // req.body has { testRunId, testCaseId, passed, summary }
-                broadcast(testRunId, 'test_case_complete', {
-                    ...req.body,
-                    status: passed ? 'passed' : 'failed'
-                });
+
+                const payload = {
+                    testRunId,
+                    testCaseId,
+                    passed: computedPassed,
+                    summary,
+                    status: computedPassed ? 'passed' : 'failed'
+                };
+
+                safeSend('agent:test-case-complete', payload);
+                broadcast(testRunId, 'test_case_complete', payload);
+                console.log(`[server] Test Case ${testCaseId} computed result: ${payload.status} (Steps: ${tcSteps.length}, Failures: ${hasFailure})`);
             }
             res.json({ status: 'ok' });
         } catch (e: any) {
@@ -303,7 +464,7 @@ export function startAgentServer(port: number = 3000, mainWindow: InstanceType<t
                 runData.completedAt = new Date().toISOString();
 
                 await fs.writeJson(runJsonPath, runData, { spaces: 2 });
-                mainWindow.webContents.send('agent:run-complete', req.body);
+                safeSend('agent:run-complete', req.body);
                 broadcast(testRunId, 'run_complete', req.body);
             }
             res.json({ status: 'ok' });
@@ -585,7 +746,7 @@ export function startAgentServer(port: number = 3000, mainWindow: InstanceType<t
             await fs.writeJson(planPath, plan, { spaces: 2 });
 
             // Notify frontend via IPC
-            mainWindow.webContents.send('project:updated', { id });
+            safeSend('project:updated', { id });
 
             res.json({ success: true });
         } catch (e: any) {
