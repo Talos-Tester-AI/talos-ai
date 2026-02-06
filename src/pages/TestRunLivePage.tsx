@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, memo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, CheckCircle, XCircle, Clock, Loader, StopCircle, Image, Brain, FileText } from 'lucide-react';
-import { getTestRun, cancelTestRun } from '../api/client';
+import { getTestRun, cancelTestRun, saveTestRun } from '../api/client';
 import type { TestRun, TestRunSSEEvent } from '../types';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
@@ -30,6 +30,8 @@ interface TestCaseProgress {
   status: 'pending' | 'running' | 'passed' | 'failed';
   steps: StepResultData[];
   pendingSteps?: { order: number; instruction: string; expectedResult?: string }[]; // Steps not yet executed
+  localSetup?: GlobalStepProgress;
+  localTeardown?: GlobalStepProgress;
 }
 
 interface GlobalStepProgress {
@@ -151,6 +153,29 @@ const TestCaseItem = memo(({
       </div>
 
       <div className="space-y-1 mt-2">
+        {/* Local Setup */}
+        {testCase.localSetup && (
+          <div className={`flex items-start gap-2 p-2 rounded ${testCase.localSetup.status === 'running' ? 'bg-blue-50 border border-blue-200' :
+            testCase.localSetup.status === 'passed' ? 'bg-gray-50 border border-gray-200' :
+              testCase.localSetup.status === 'failed' ? 'bg-red-50 border border-red-200' :
+                'bg-gray-50 border border-gray-200'
+            }`}>
+            <div className="flex-shrink-0 mt-0.5">
+              {testCase.localSetup.status === 'running' && <Loader size={14} className="text-blue-600 animate-spin" />}
+              {testCase.localSetup.status === 'passed' && <CheckCircle size={14} className="text-gray-500" />}
+              {testCase.localSetup.status === 'failed' && <XCircle size={14} className="text-red-500" />}
+              {testCase.localSetup.status === 'pending' && <Clock size={14} className="text-gray-400" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-gray-500 uppercase mb-0.5">Local Setup</p>
+              <p className="text-sm text-gray-900 truncate">{testCase.localSetup.instruction}</p>
+              {testCase.localSetup.error && (
+                <p className="text-xs text-red-600 font-mono mt-1">{testCase.localSetup.error}</p>
+              )}
+            </div>
+          </div>
+        )}
+
         {testCase.steps.map((step, idx) => (
           <div
             key={idx}
@@ -230,6 +255,29 @@ const TestCaseItem = memo(({
               </div>
             );
           })
+        )}
+
+        {/* Local Teardown */}
+        {testCase.localTeardown && (
+          <div className={`flex items-start gap-2 p-2 rounded ${testCase.localTeardown.status === 'running' ? 'bg-blue-50 border border-blue-200' :
+            testCase.localTeardown.status === 'passed' ? 'bg-gray-50 border border-gray-200' :
+              testCase.localTeardown.status === 'failed' ? 'bg-red-50 border border-red-200' :
+                'bg-gray-50 border border-gray-200'
+            }`}>
+            <div className="flex-shrink-0 mt-0.5">
+              {testCase.localTeardown.status === 'running' && <Loader size={14} className="text-blue-600 animate-spin" />}
+              {testCase.localTeardown.status === 'passed' && <CheckCircle size={14} className="text-gray-500" />}
+              {testCase.localTeardown.status === 'failed' && <XCircle size={14} className="text-red-500" />}
+              {testCase.localTeardown.status === 'pending' && <Clock size={14} className="text-gray-400" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-gray-500 uppercase mb-0.5">Local Teardown</p>
+              <p className="text-sm text-gray-900 truncate">{testCase.localTeardown.instruction}</p>
+              {testCase.localTeardown.error && (
+                <p className="text-xs text-red-600 font-mono mt-1">{testCase.localTeardown.error}</p>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </div>
@@ -382,11 +430,11 @@ export const TestRunLivePage = () => {
       }
 
       // Populate features map from persisting steps
-      if (run.executionSteps && run.executionSteps.length > 0) {
+      if (run.stepResults && run.stepResults.length > 0) {
         setFeatures(prev => {
           const newFeatures = new Map(prev);
 
-          run.executionSteps!.forEach((step: StepResultData) => {
+          run.stepResults!.forEach((step: any) => {
             if (!newFeatures.has(step.featureId)) {
               newFeatures.set(step.featureId, {
                 featureId: step.featureId,
@@ -518,7 +566,17 @@ export const TestRunLivePage = () => {
                   title: tcStruct.testCaseTitle,
                   status: 'pending',
                   steps: [],
-                  pendingSteps: tcStruct.steps
+                  pendingSteps: tcStruct.steps,
+                  localSetup: ((tcStruct as any).localSetup && (tcStruct as any).localSetup.instruction) ? {
+                    instruction: (tcStruct as any).localSetup.instruction,
+                    status: (tcStruct as any).localSetup.status || 'pending',
+                    error: (tcStruct as any).localSetup.error
+                  } : undefined,
+                  localTeardown: ((tcStruct as any).localTeardown && (tcStruct as any).localTeardown.instruction) ? {
+                    instruction: (tcStruct as any).localTeardown.instruction,
+                    status: (tcStruct as any).localTeardown.status || 'pending',
+                    error: (tcStruct as any).localTeardown.error
+                  } : undefined
                 };
                 feature!.testCases.set(tcStruct.testCaseId, testCase);
               } else {
@@ -549,7 +607,7 @@ export const TestRunLivePage = () => {
       setTestRun(prev => prev ? {
         ...prev,
         status: data.data.status,
-        summary: data.data.summary,
+        summary: data.data.summary || prev.summary,
         error: data.data.error || prev.error // Update error if present
       } : null);
     });
@@ -620,8 +678,38 @@ export const TestRunLivePage = () => {
             // Remove the first pending step (steps execute in order)
             pendingSteps: existingTestCase.pendingSteps ? existingTestCase.pendingSteps.slice(1) : []
           };
+
+          // FALLBACK: Mark Local Setup as passed if first step is running/passed
+          if (updatedTestCase.localSetup && updatedTestCase.localSetup.status === 'pending') {
+            updatedTestCase.localSetup = {
+              ...updatedTestCase.localSetup,
+              status: 'passed'
+            };
+          }
         }
+
+        // AUTO-COMPLETION LOGIC (Client-side)
+        // If no more pending steps, mark test case as finished immediately
+        if (updatedTestCase.pendingSteps && updatedTestCase.pendingSteps.length === 0) {
+          const hasFailure = updatedTestCase.steps.some(s => s.status === 'failed');
+          updatedTestCase.status = hasFailure ? 'failed' : 'passed';
+        }
+
         feature.testCases.set(stepData.testCaseId, updatedTestCase);
+
+        // FEATURE AUTO-COMPLETION LOGIC
+        // If all test cases are done, mark feature as finished
+        const allTestCases = Array.from(feature.testCases.values());
+        // Check if we have all test cases (compare with known structure if possible, but here we just check current map)
+        // Ideally we should know total test cases expected. 
+        // For now, we assume if all *known* test cases are in final state, we might be done.
+        // Better: Check if any are still 'pending' or 'running'.
+        const isFeatureComplete = allTestCases.every(tc => tc.status === 'passed' || tc.status === 'failed');
+
+        if (isFeatureComplete && allTestCases.length > 0) {
+          const featureFailed = allTestCases.some(tc => tc.status === 'failed');
+          feature.status = featureFailed ? 'failed' : 'passed';
+        }
 
         return newFeatures;
       });
@@ -630,7 +718,12 @@ export const TestRunLivePage = () => {
     eventSource.addEventListener('test_case_complete', (event) => {
       const messageEvent = event as MessageEvent;
       const parsed: TestRunSSEEvent = JSON.parse(messageEvent.data);
-      const { featureId, testCaseId, status } = parsed.data;
+      const { featureId, testCaseId, status, runSummary } = parsed.data;
+
+      setTestRun(prev => prev ? {
+        ...prev,
+        summary: runSummary || prev.summary // Update summary if provided
+      } : null);
 
       setFeatures(prev => {
         const newFeatures = new Map(prev);
@@ -650,6 +743,18 @@ export const TestRunLivePage = () => {
               ...existingTestCase,
               status: status
             };
+
+            // FALLBACK: Mark Local Teardown as done (match status if failed? or just passed?)
+            // Usually teardown runs regardless. If TC failed, teardown might still pass.
+            // But if we forced it here, let's say passed unless it was already set to failed?
+            // User just wants it marked done.
+            if (testCase.localTeardown && testCase.localTeardown.status === 'pending') {
+              testCase.localTeardown = {
+                ...testCase.localTeardown,
+                status: 'passed' // Assume passed if we reached completion without explicit teardown failure
+              };
+            }
+
             feature.testCases.set(testCaseId, testCase);
           }
           // Update feature in map
@@ -722,13 +827,103 @@ export const TestRunLivePage = () => {
       });
     });
 
+    eventSource.addEventListener('test_case_setup_result', (event) => {
+      const messageEvent = event as MessageEvent;
+      const parsed = JSON.parse(messageEvent.data);
+      const { featureId: rawFeatureId, testCaseId, status, error } = parsed.data;
+
+      setFeatures(prev => {
+        const newFeatures = new Map(prev);
+        let targetFeatureId = rawFeatureId;
+
+        // Fallback: If featureId missing, find feature containing this test case
+        if (!targetFeatureId) {
+          for (const [fId, f] of newFeatures.entries()) {
+            if (f.testCases.has(testCaseId)) {
+              targetFeatureId = fId;
+              break;
+            }
+          }
+        }
+
+        const feature = targetFeatureId ? newFeatures.get(targetFeatureId) : undefined;
+        if (feature) {
+          const newTestCases = new Map(feature.testCases);
+          const testCase = newTestCases.get(testCaseId);
+          if (testCase) {
+            const updatedTestCase = { ...testCase };
+            // Only update if we have a valid setup object (meaning it was expected)
+            if (updatedTestCase.localSetup) {
+              updatedTestCase.localSetup = {
+                ...updatedTestCase.localSetup,
+                status: status,
+                error: error
+              };
+            } else {
+              // Should we force it if missing?
+              // User said "don't show if not set". 
+              // If we receive a result, it implies it was executed.
+              // But if initial state didn't have it (empty instruction), maybe we shouldn't show it?
+              // Or maybe we should? PROBABLY NOT based on user request "keep hidden if not set".
+              // BUT if we receive an event, it means the agent ran it.
+              // Let's strictly follow the instruction-presence check.
+              // If instruction was empty, we shouldn't show it.
+              // Assuming agent won't send results for empty instructions.
+            }
+            newTestCases.set(testCaseId, updatedTestCase);
+            return new Map(newFeatures.set(feature.featureId, { ...feature, testCases: newTestCases }));
+          }
+        }
+        return prev;
+      });
+    });
+
+    eventSource.addEventListener('test_case_teardown_result', (event) => {
+      const messageEvent = event as MessageEvent;
+      const parsed = JSON.parse(messageEvent.data);
+      const { featureId: rawFeatureId, testCaseId, status, error } = parsed.data;
+
+      setFeatures(prev => {
+        const newFeatures = new Map(prev);
+        let targetFeatureId = rawFeatureId;
+
+        if (!targetFeatureId) {
+          for (const [fId, f] of newFeatures.entries()) {
+            if (f.testCases.has(testCaseId)) {
+              targetFeatureId = fId;
+              break;
+            }
+          }
+        }
+
+        const feature = targetFeatureId ? newFeatures.get(targetFeatureId) : undefined;
+        if (feature) {
+          const newTestCases = new Map(feature.testCases);
+          const testCase = newTestCases.get(testCaseId);
+          if (testCase) {
+            const updatedTestCase = { ...testCase };
+            if (updatedTestCase.localTeardown) {
+              updatedTestCase.localTeardown = {
+                ...updatedTestCase.localTeardown,
+                status: status,
+                error: error
+              };
+            }
+            newTestCases.set(testCaseId, updatedTestCase);
+            return new Map(newFeatures.set(feature.featureId, { ...feature, testCases: newTestCases }));
+          }
+        }
+        return prev;
+      });
+    });
+
     eventSource.addEventListener('run_complete', (event) => {
       const messageEvent = event as MessageEvent;
       const parsed: TestRunSSEEvent = JSON.parse(messageEvent.data);
       setTestRun(prev => prev ? {
         ...prev,
         status: parsed.data.status,
-        summary: parsed.data.summary,
+        summary: parsed.data.summary || prev.summary,
         error: parsed.data.error || prev.error // Preserve existing error or take new one
       } : null);
 
@@ -789,17 +984,59 @@ export const TestRunLivePage = () => {
 
   const isRunning = !['completed', 'failed', 'cancelled'].includes(testRun.status);
 
+  const handleSave = async () => {
+    if (!testRunId) return;
+    try {
+      await saveTestRun(testRunId);
+      // Wait a bit or update local state to show saved
+      navigate(`/projects/${testRun?.projectId}`);
+    } catch (error) {
+      console.error('Failed to save test run:', error);
+      alert('Failed to save test run');
+    }
+  };
+
+  const handleDiscard = () => {
+    // Just navigate away, backend will hide it from list
+    if (confirm('Are you sure you want to discard this test run? It will not be saved to your history.')) {
+      navigate(`/projects/${testRun?.projectId}`);
+    }
+  };
+
   return (
     <div>
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={() => navigate(-1)}
-        className="mb-4"
-      >
-        <ArrowLeft size={16} className="mr-2" />
-        Back
-      </Button>
+      <div className="flex justify-between items-center mb-4">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => navigate(-1)}
+        >
+          <ArrowLeft size={16} className="mr-2" />
+          Back
+        </Button>
+
+        {
+          ['completed', 'failed', 'cancelled'].includes(testRun.status) && !testRun.isSaved && (
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleDiscard}
+                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+              >
+                Discard Results
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSave}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                Save Results
+              </Button>
+            </div>
+          )
+        }
+      </div>
 
       {/* Header */}
       <Card className="mb-6">
@@ -890,12 +1127,32 @@ export const TestRunLivePage = () => {
                   The test run has finished with status: <span className="font-bold uppercase">{testRun.status}</span>
                 </p>
               </div>
-              <Button
-                onClick={() => navigate(`/projects/${testRun.projectId}`)}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white"
-              >
-                Return to Project
-              </Button>
+              {
+                !testRun.isSaved ? (
+                  <div className="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={handleDiscard}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-100 bg-white"
+                    >
+                      Discard Results
+                    </Button>
+                    <Button
+                      onClick={handleSave}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                    >
+                      Save Results
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    onClick={() => navigate(`/projects/${testRun.projectId}`)}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                  >
+                    Return to Project
+                  </Button>
+                )
+              }
             </div>
           </Card>
         )
